@@ -40,19 +40,92 @@ cd C:\path\to\workstation\win\herdr
    `review-remove.ps1`, `az-watcher.ps1`
 7. Copy Windows quick-action TOMLs + `worktree-layout.toml` into herdr-plus
 
-Then edit machine-local values at the top of `worktree-make.ps1`:
+Install does **not** fill in your paths, branch prefix, Azure org, or the required
+`config.toml` keys. Do the [Prerequisites](#prerequisites--values-you-must-change)
+section next before creating worktrees.
 
-* `SRC_ROOT` - primary clones (`$HOME\source\repos\<repo>`)
-* `BRANCH_PREFIX` - e.g. `feature/<you>`
+## Prerequisites — values you must change
 
-and at the top of `review-make.ps1`:
+These are machine-local. Placeholders like `<you>` / `<org>` are not defaults —
+replace them with your real values. `install.ps1` shims point at this repo, so
+edit the copies under `win\herdr\` (not a separate install tree).
 
-* `SRC_ROOT` - same clones
-* `REVIEW_MODEL` - the model that reviews (`claude-fable-5`)
-* `REVIEW_PERMISSION_MODE` - `plan`, so the reviewer cannot edit the code
+### 1. Primary clones on disk
 
-Story worktrees and reviews both use Herdr's `[worktrees].directory` from
-config.toml.
+Every repo name you type into **New Dev Worktree** (or that az-watcher maps from
+Azure) must already exist as a git clone here:
+
+| Placeholder | Meaning | Example |
+|-------------|---------|---------|
+| `<SRC_ROOT>` | Directory of primary clones | `$env:USERPROFILE\source\repos` |
+| `<repo>` | Clone folder name (Azure spaces → underscores) | `My_Repo` |
+
+Layout: `<SRC_ROOT>\<repo>` with a remote named `origin` and a reachable default
+branch. Missing clones are reported, never guessed.
+
+### 2. Script defaults (required)
+
+Edit the block marked `EDIT THESE FOR YOUR MACHINE` at the top of each file:
+
+| File | Variable | Replace | Example | Why |
+|------|----------|---------|---------|-----|
+| `worktree-make.ps1` | `$SRC_ROOT` | path to primary clones | `$env:USERPROFILE\source\repos` | Where development/review story checkouts are cut from |
+| `worktree-make.ps1` | `$BRANCH_PREFIX` | `feature/YOU` | `feature/jsmith` | Local + pushed branch becomes `feature/jsmith/<id>-<slug>` |
+| `review-make.ps1` | `$SRC_ROOT` | same as above (or set `WT_REVIEW_SRC_ROOT`) | `$env:USERPROFILE\source\repos` | Where review PR checkouts are cut from |
+| `review-make.ps1` | `$REVIEW_MODEL` | model id if not using Fable | `claude-fable-5` | Model for the Claude Review tab |
+| `review-make.ps1` | `$REVIEW_PERMISSION_MODE` | leave `plan` unless you intentionally want edits | `plan` | Keeps reviews read-only |
+
+Optional (same files): `$CLAUDE_CMD` / `$CURSOR_CMD` in `worktree-make.ps1` if you
+want different agent permission modes — keep `worktree-layout.toml` in sync.
+
+Do **not** set a separate worktree root in the scripts. Story and review folders
+use Herdr's `[worktrees].directory` (next section).
+
+### 3. Herdr `config.toml` (required keys)
+
+`install.ps1` never merges these. Edit by hand:
+
+```powershell
+micro $env:APPDATA\herdr\config.toml
+```
+
+| Key | Replace / set to | Example | Why |
+|-----|------------------|---------|-----|
+| `[worktrees] directory` | your worktree base (escaped backslashes) | `"C:\\Users\\<you>\\source\\worktrees"` | `development\` and `review\` live under this path |
+| `[ui.sidebar.spaces] rows` | must include `$tree` **before** `state_icon` | `[["$tree", "state_icon", "workspace"]]` | Nested story/review connectors; without it bullets stay left-aligned |
+| herdr-plus keybinds | `prefix+up` / `prefix+down` → **`-windows`** action ids | see [Herdr Plus keybinds (Windows)](#herdr-plus-keybinds-windows) | Linux ids do not open the pickers on native Windows |
+| reviewr toggle (optional; Windows caveats below) | `prefix+r` → `persiyanov.reviewr.toggle` | same as WSL README | Show/hide the review pane when the plugin supports it |
+
+After edits:
+
+```powershell
+herdr config check
+herdr server reload-config   # or: herdr --session <name> server reload-config
+```
+
+Theme, accent, Agent Usage rows, and toast snippets are optional polish — not
+required to create a worktree. Agent Usage / reviewr may still need WSL or a
+plugin update on Windows beta (see [Plugin platform caveats](#plugin-platform-caveats-windows-beta)).
+
+### 4. Azure DevOps (reviews, story-reap, az-watcher)
+
+`az` is **not** installed by `install.ps1`. Needed for **New Code Review**,
+**Clean Up Finished Reviews**, **Clean Up Closed Stories**, and **Sync Azure
+Reviews**:
+
+| Value | Where | Replace | Example |
+|-------|-------|---------|---------|
+| Organization URL | `az devops configure` | `https://dev.azure.com/<org>` | `https://dev.azure.com/contoso` |
+| Project name | `az devops configure` | `'<project>'` | `'MyProject'` |
+| Login identity | `az login` | your Azure account | — |
+
+```powershell
+az login
+az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
+```
+
+Override per run with `AZDO_ORG` / `AZDO_PROJECT` if needed. Verify with
+`az-watcher.ps1 run --dry-run --window 0` (see [`az-watcher/README.md`](az-watcher/README.md)).
 
 ## Herdr settings (manual `config.toml`)
 
@@ -789,7 +862,7 @@ herdr server reload-config
 
 ### Dry run
 
-1. Set `SRC_ROOT` in `worktree-make.ps1` and `[worktrees].directory` in config.
+1. Finish the [Prerequisites](#prerequisites--values-you-must-change) edits (`$SRC_ROOT`, `$BRANCH_PREFIX`, `[worktrees].directory`, sidebar `$tree` rows, Windows herdr-plus keybinds).
 2. Place test repos under `SRC_ROOT`.
 3. In herdr: **prefix+down** → **New Dev Worktree** (or invoke
    `quick-actions-windows`).
