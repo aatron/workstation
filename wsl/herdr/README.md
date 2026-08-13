@@ -2,7 +2,18 @@
 
 Shared WSL Herdr + herdr-plus workflow for multi-repo story worktrees (dev and review).
 
-## Prerequisites — values you must change
+## Installation
+
+```
+cd /path/to/workstation/wsl/herdr
+./install.sh
+```
+
+Idempotent. Installs herdr (≥ 0.7.5) + CLIs, creates `~/.config/herdr/config.toml` **only if missing** (never overwrites an existing one), installs plugins (`herdr-plus`, Agent Usage, reviewr), symlinks scripts into `~/bin`, and copies quick actions + `worktree-layout.toml`.
+
+Then do the edits below.
+
+## Values you must change
 
 Placeholders are not defaults. Edit the repo copies under `wsl/herdr/` (symlinked into `~/bin`).
 
@@ -20,7 +31,7 @@ Clones must already exist at `$SRC_ROOT/<repo>` (`origin` + default branch). Azu
 
 ### `~/.config/herdr/config.toml`
 
-Install never merges these — set by hand, then `herdr config check` and `herdr server reload-config`:
+Created by install when missing. Merge these by hand (install never does), then `herdr config check` and `herdr server reload-config`:
 
 ```toml
 [worktrees]
@@ -40,17 +51,6 @@ Also add herdr-plus keybinds (`prefix+up` / `prefix+down`) — see [Herdr Plus k
 az login
 az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
 ```
-
-## Installation
-
-```
-cd /path/to/workstation/wsl/herdr
-./install.sh
-```
-
-Idempotent; never overwrites root `config.toml`. Installs herdr (≥ 0.7.5) + CLIs, plugins (`herdr-plus`, Agent Usage, reviewr), symlinks scripts into `~/bin`, and copies quick actions + `worktree-layout.toml`.
-
-Then finish the [Prerequisites](#prerequisites--values-you-must-change) edits if you have not already.
 
 ## Herdr settings (manual `config.toml`)
 
@@ -700,7 +700,7 @@ Full details, cron line, and limitations: [`az-watcher/README.md`](az-watcher/RE
 
 Goal: confirm notes + three worktrees are created under `[worktrees].directory` with per-repo claude/cursor/bash tabs.
 
-1. Finish [Prerequisites](#prerequisites--values-you-must-change) + [Installation](#installation).
+1. Finish [Installation](#installation) + [Values you must change](#values-you-must-change).
 2. Clone (or place) three git repos under `SRC_ROOT`, e.g.:
    * `$SRC_ROOT/repo-a`
    * `$SRC_ROOT/repo-b`

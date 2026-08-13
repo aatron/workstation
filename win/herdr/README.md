@@ -17,7 +17,18 @@ multi-repo story worktrees (dev and review). Bash source of truth lives in
 > **Windows beta.** Plugins are **preview**; `herdr --remote` is unsupported.
 > See [Windows beta](https://herdr.dev/docs/windows-beta/).
 
-## Prerequisites — values you must change
+## Installation
+
+```powershell
+cd C:\path\to\workstation\win\herdr
+.\install.ps1
+```
+
+Idempotent. Installs herdr (≥ 0.7.5) + CLIs, creates `%APPDATA%\herdr\config.toml` **only if missing** (never overwrites an existing one), installs plugins, shims scripts into `%USERPROFILE%\bin`, and copies quick actions + `worktree-layout.toml`.
+
+Then do the edits below.
+
+## Values you must change
 
 Placeholders are not defaults. Edit the repo copies under `win\herdr\` (shims point here).
 
@@ -35,7 +46,7 @@ Clones must already exist at `$SRC_ROOT\<repo>` (`origin` + default branch). Azu
 
 ### `%APPDATA%\herdr\config.toml`
 
-Install never merges these — set by hand, then `herdr config check` and `herdr server reload-config`:
+Created by install when missing. Merge these by hand (install never does), then `herdr config check` and `herdr server reload-config`:
 
 ```toml
 [worktrees]
@@ -55,17 +66,6 @@ Also add herdr-plus keybinds with the **`-windows`** action ids (`prefix+up` / `
 az login
 az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
 ```
-
-## Installation
-
-```powershell
-cd C:\path\to\workstation\win\herdr
-.\install.ps1
-```
-
-Idempotent; never overwrites root `config.toml`. Installs herdr (≥ 0.7.5) + CLIs, plugins, shims into `%USERPROFILE%\bin`, and copies quick actions + `worktree-layout.toml`.
-
-Then finish the [Prerequisites](#prerequisites--values-you-must-change) edits if you have not already.
 
 ## Herdr settings (manual `config.toml`)
 
@@ -802,7 +802,7 @@ herdr server reload-config
 
 ### Dry run
 
-1. Finish [Prerequisites](#prerequisites--values-you-must-change) + [Installation](#installation).
+1. Finish [Installation](#installation) + [Values you must change](#values-you-must-change).
 2. Place test repos under `SRC_ROOT`.
 3. In herdr: **prefix+down** → **New Dev Worktree** (or invoke
    `quick-actions-windows`).
