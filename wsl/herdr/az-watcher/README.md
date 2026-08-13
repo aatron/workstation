@@ -21,33 +21,14 @@ is the PR timestamps in Azure.
 
 ## Prerequisites
 
-`az` is **not** installed by `install.sh`. Install the Azure CLI yourself, then
-set these values (placeholders are not defaults — replace them):
-
-| Value | Command / variable | Replace | Example |
-|-------|--------------------|---------|---------|
-| Login | `az login` | your Azure account | — |
-| Organization | `az devops configure … organization=` | `https://dev.azure.com/<org>` | `https://dev.azure.com/contoso` |
-| Project | `az devops configure … project=` | `'<project>'` | `'MyProject'` |
-| Optional override | `AZDO_ORG` / `AZDO_PROJECT` | same strings, per-run | — |
+`az` is not installed by `install.sh`. Set:
 
 ```bash
 az login
 az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
 ```
 
-Also required before a real sync (see the parent [Prerequisites](../README.md#prerequisites--values-you-must-change)):
-
-* `SRC_ROOT` / `BRANCH_PREFIX` in `worktree-make.sh`
-* `[worktrees].directory` in `~/.config/herdr/config.toml`
-* Primary clones under `SRC_ROOT/<repo>` (Azure repo spaces → underscores)
-
-The `azure-devops` extension auto-installs the first time `az repos` / `az boards`
-runs. `git`, `jq` and `flock` are also needed; `install.sh` reports all of these
-in its closing CLI check.
-
-Org and project come from those `az devops configure` defaults. Override per-run
-with `AZDO_ORG` / `AZDO_PROJECT` (passed through as `--org` / `--project`).
+Also need `SRC_ROOT` / `BRANCH_PREFIX` and `[worktrees].directory` from the parent [Prerequisites](../README.md#prerequisites--values-you-must-change). Override org/project per run with `AZDO_ORG` / `AZDO_PROJECT`.
 
 > **WSL note.** If `az` resolves to the Windows build under `/mnt/c`, it emits
 > CRLF and tries to encode output as cp1252 — which silently truncates JSON
