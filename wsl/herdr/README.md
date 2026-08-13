@@ -2,20 +2,9 @@
 
 Shared WSL Herdr + herdr-plus workflow for multi-repo story worktrees (dev and review).
 
-## Installation
+## Prerequisites — values you must change
 
-```
-cd /path/to/workstation/wsl/herdr
-./install.sh
-```
-
-Idempotent. Installs herdr (≥ 0.7.5) + CLIs, creates `~/.config/herdr/config.toml` **only if missing** (never overwrites an existing one), installs plugins (`herdr-plus`, Agent Usage, reviewr), symlinks scripts into `~/bin`, and copies quick actions + `worktree-layout.toml`.
-
-Then do the edits below.
-
-## Values you must change
-
-Placeholders are not defaults. Edit the repo copies under `wsl/herdr/` (symlinked into `~/bin`).
+Placeholders are not defaults. Edit the repo copies under `wsl/herdr/` (install symlinks them into `~/bin`).
 
 ### Scripts (`EDIT THESE FOR YOUR MACHINE`)
 
@@ -29,9 +18,27 @@ Placeholders are not defaults. Edit the repo copies under `wsl/herdr/` (symlinke
 
 Clones must already exist at `$SRC_ROOT/<repo>` (`origin` + default branch). Azure repo spaces → underscores (`My Repo` → `My_Repo`).
 
-### `~/.config/herdr/config.toml`
+### Azure DevOps (reviews / az-watcher / story-reap)
 
-Created by install when missing. Merge these by hand (install never does), then `herdr config check` and `herdr server reload-config`:
+`az` is not installed by `install.sh`:
+
+```bash
+az login
+az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
+```
+
+## Installation
+
+```
+cd /path/to/workstation/wsl/herdr
+./install.sh
+```
+
+Idempotent. Installs herdr (≥ 0.7.5) + CLIs, creates `~/.config/herdr/config.toml` **only if missing** (never overwrites an existing one), installs plugins (`herdr-plus`, Agent Usage, reviewr), symlinks scripts into `~/bin`, and copies quick actions + `worktree-layout.toml`.
+
+## After install — `config.toml`
+
+Merge these by hand (install never does), then `herdr config check` and `herdr server reload-config`:
 
 ```toml
 [worktrees]
@@ -42,15 +49,6 @@ rows = [["$tree", "state_icon", "workspace"]]
 ```
 
 Also add herdr-plus keybinds (`prefix+up` / `prefix+down`) — see [Herdr Plus keybinds](#herdr-plus-keybinds).
-
-### Azure DevOps (reviews / az-watcher / story-reap)
-
-`az` is not installed by `install.sh`:
-
-```bash
-az login
-az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
-```
 
 ## Herdr settings (manual `config.toml`)
 
@@ -700,7 +698,7 @@ Full details, cron line, and limitations: [`az-watcher/README.md`](az-watcher/RE
 
 Goal: confirm notes + three worktrees are created under `[worktrees].directory` with per-repo claude/cursor/bash tabs.
 
-1. Finish [Installation](#installation) + [Values you must change](#values-you-must-change).
+1. Finish [Prerequisites](#prerequisites--values-you-must-change), [Installation](#installation), and [After install — config.toml](#after-install--configtoml).
 2. Clone (or place) three git repos under `SRC_ROOT`, e.g.:
    * `$SRC_ROOT/repo-a`
    * `$SRC_ROOT/repo-b`

@@ -17,20 +17,9 @@ multi-repo story worktrees (dev and review). Bash source of truth lives in
 > **Windows beta.** Plugins are **preview**; `herdr --remote` is unsupported.
 > See [Windows beta](https://herdr.dev/docs/windows-beta/).
 
-## Installation
+## Prerequisites — values you must change
 
-```powershell
-cd C:\path\to\workstation\win\herdr
-.\install.ps1
-```
-
-Idempotent. Installs herdr (≥ 0.7.5) + CLIs, creates `%APPDATA%\herdr\config.toml` **only if missing** (never overwrites an existing one), installs plugins, shims scripts into `%USERPROFILE%\bin`, and copies quick actions + `worktree-layout.toml`.
-
-Then do the edits below.
-
-## Values you must change
-
-Placeholders are not defaults. Edit the repo copies under `win\herdr\` (shims point here).
+Placeholders are not defaults. Edit the repo copies under `win\herdr\` (install shims them into `%USERPROFILE%\bin`).
 
 ### Scripts (`EDIT THESE FOR YOUR MACHINE`)
 
@@ -44,9 +33,27 @@ Placeholders are not defaults. Edit the repo copies under `win\herdr\` (shims po
 
 Clones must already exist at `$SRC_ROOT\<repo>` (`origin` + default branch). Azure repo spaces → underscores (`My Repo` → `My_Repo`).
 
-### `%APPDATA%\herdr\config.toml`
+### Azure DevOps (reviews / az-watcher / story-reap)
 
-Created by install when missing. Merge these by hand (install never does), then `herdr config check` and `herdr server reload-config`:
+`az` is not installed by `install.ps1`:
+
+```powershell
+az login
+az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
+```
+
+## Installation
+
+```powershell
+cd C:\path\to\workstation\win\herdr
+.\install.ps1
+```
+
+Idempotent. Installs herdr (≥ 0.7.5) + CLIs, creates `%APPDATA%\herdr\config.toml` **only if missing** (never overwrites an existing one), installs plugins, shims scripts into `%USERPROFILE%\bin`, and copies quick actions + `worktree-layout.toml`.
+
+## After install — `config.toml`
+
+Merge these by hand (install never does), then `herdr config check` and `herdr server reload-config`:
 
 ```toml
 [worktrees]
@@ -57,15 +64,6 @@ rows = [["$tree", "state_icon", "workspace"]]
 ```
 
 Also add herdr-plus keybinds with the **`-windows`** action ids (`prefix+up` / `prefix+down`) — see [Herdr Plus keybinds (Windows)](#herdr-plus-keybinds-windows).
-
-### Azure DevOps (reviews / az-watcher / story-reap)
-
-`az` is not installed by `install.ps1`:
-
-```powershell
-az login
-az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
-```
 
 ## Herdr settings (manual `config.toml`)
 
@@ -802,7 +800,7 @@ herdr server reload-config
 
 ### Dry run
 
-1. Finish [Installation](#installation) + [Values you must change](#values-you-must-change).
+1. Finish [Prerequisites](#prerequisites--values-you-must-change), [Installation](#installation), and [After install — config.toml](#after-install--configtoml).
 2. Place test repos under `SRC_ROOT`.
 3. In herdr: **prefix+down** → **New Dev Worktree** (or invoke
    `quick-actions-windows`).
