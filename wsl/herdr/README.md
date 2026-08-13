@@ -2,118 +2,55 @@
 
 Shared WSL Herdr + herdr-plus workflow for multi-repo story worktrees (dev and review).
 
-## Installation set-up
-
-Run this first — it installs `herdr` and the other CLIs, and creates a default `config.toml` when one does not exist yet.
-
-On each machine (home and work), clone this repo in WSL, then:
-
-```
-cd /path/to/workstation/wsl/herdr
-./install.sh
-```
-
-`install.sh` will (**idempotent**; never overwrites the root Herdr `config.toml`):
-
-1. Install CLIs if missing: [herdr](https://herdr.dev/) (≥ 0.7.5), `gum`, `git`, `micro`, `jq`, `claude`, `agent`; ensure `~/bin` and `~/.local/bin` are on `PATH`
-2. If `~/.config/herdr/config.toml` is missing, create it with the documented default:
-   `herdr --default-config > ~/.config/herdr/config.toml`
-3. Install plugins:
-   * `cloudmanic/herdr-plus` — Projects, quick actions, worktree auto-layout
-   * `senna-lang/herdr-agent-usage` — Context meters + provider rate limits
-   * `persiyanov/herdr-reviewr` — Review workflow helpers
-4. Apply managed `herdr-reviewr` plugin config (in the plugin config dir only; the root Herdr `config.toml` is never overwritten)
-5. Symlink `worktree-make.sh` → `~/bin/make-worktree.sh` and `worktree-launch.sh` → `~/bin/worktree-launch.sh`
-6. Copy quick actions into herdr-plus `quick-actions/`:
-   * `new-worktree-dev.toml` → **New Dev Worktree** (opens a tab, then runs the script)
-   * `remove-worktree.toml` → **Delete Story Worktree** (picks from the stories on disk → removes matching `{id}-*` worktrees, branches, and notes)
-7. Copy `worktree-layout.toml` into herdr-plus `worktrees/` (wildcard layout for every repo)
-
-Install does **not** fill in your paths, branch prefix, Azure org, or the required
-`config.toml` keys. Do the [Prerequisites](#prerequisites--values-you-must-change)
-section next before creating worktrees.
-
 ## Prerequisites — values you must change
 
-These are machine-local. Placeholders like `<you>` / `<org>` are not defaults —
-replace them with your real values. Scripts are symlinked from this repo into
-`~/bin`, so edit the copies under `wsl/herdr/` (not a separate install tree).
+Placeholders are not defaults. Edit the repo copies under `wsl/herdr/` (symlinked into `~/bin`).
 
-### 1. Primary clones on disk
+### Scripts (`EDIT THESE FOR YOUR MACHINE`)
 
-Every repo name you type into **New Dev Worktree** (or that az-watcher maps from
-Azure) must already exist as a git clone here:
+| File | Variable | Change to |
+|------|----------|-----------|
+| `worktree-make.sh` | `SRC_ROOT` | your primary clones dir, e.g. `$HOME/source/repos` |
+| `worktree-make.sh` | `BRANCH_PREFIX` | e.g. `feature/jsmith` (ships as `feature/YOU`) |
+| `review-make.sh` | `SRC_ROOT` | same as above |
+| `review-make.sh` | `REVIEW_MODEL` | e.g. `claude-fable-5` |
+| `review-make.sh` | `REVIEW_PERMISSION_MODE` | leave `plan` (read-only reviews) |
 
-| Placeholder | Meaning | Example |
-|-------------|---------|---------|
-| `<SRC_ROOT>` | Directory of primary clones | `$HOME/source/repos` |
-| `<repo>` | Clone folder name (Azure spaces → underscores) | `My_Repo` |
+Clones must already exist at `$SRC_ROOT/<repo>` (`origin` + default branch). Azure repo spaces → underscores (`My Repo` → `My_Repo`).
 
-Layout: `<SRC_ROOT>/<repo>` with a remote named `origin` and a reachable default
-branch. Missing clones are reported, never guessed.
+### `~/.config/herdr/config.toml`
 
-### 2. Script defaults (required)
+Install never merges these — set by hand, then `herdr config check` and `herdr server reload-config`:
 
-Edit the block marked `EDIT THESE FOR YOUR MACHINE` at the top of each file:
+```toml
+[worktrees]
+directory = "~/source/worktrees"
 
-| File | Variable | Replace | Example | Why |
-|------|----------|---------|---------|-----|
-| `worktree-make.sh` | `SRC_ROOT` | path to primary clones | `$HOME/source/repos` | Where development/review story checkouts are cut from |
-| `worktree-make.sh` | `BRANCH_PREFIX` | `feature/YOU` | `feature/jsmith` | Local + pushed branch becomes `feature/jsmith/<id>-<slug>` |
-| `review-make.sh` | `SRC_ROOT` | same as above (or set `WT_REVIEW_SRC_ROOT`) | `$HOME/source/repos` | Where review PR checkouts are cut from |
-| `review-make.sh` | `REVIEW_MODEL` | model id if not using Fable | `claude-fable-5` | Model for the Claude Review tab |
-| `review-make.sh` | `REVIEW_PERMISSION_MODE` | leave `plan` unless you intentionally want edits | `plan` | Keeps reviews read-only |
-
-Optional (same files): `CLAUDE_CMD` / `CURSOR_CMD` in `worktree-make.sh` if you
-want different agent permission modes — keep `worktree-layout.toml` in sync.
-
-Do **not** set a separate worktree root in the scripts. Story and review folders
-use Herdr’s `[worktrees].directory` (next section).
-
-### 3. Herdr `config.toml` (required keys)
-
-`install.sh` never merges these. Edit by hand:
-
-```bash
-micro ~/.config/herdr/config.toml
+[ui.sidebar.spaces]
+rows = [["$tree", "state_icon", "workspace"]]
 ```
 
-| Key | Replace / set to | Example | Why |
-|-----|------------------|---------|-----|
-| `[worktrees] directory` | your worktree base | `"~/source/worktrees"` | `development/` and `review/` live under this path |
-| `[ui.sidebar.spaces] rows` | must include `$tree` **before** `state_icon` | `[["$tree", "state_icon", "workspace"]]` | Nested story/review connectors; without it bullets stay left-aligned |
-| herdr-plus keybinds | `prefix+up` / `prefix+down` → projects / quick-actions | see [Herdr Plus keybinds](#herdr-plus-keybinds) | Opens **New Dev Worktree** and the other actions |
-| reviewr toggle (optional but recommended) | `prefix+r` → `persiyanov.reviewr.toggle` | see [herdr-reviewr keybinds](#herdr-reviewr-keybinds) | Show/hide the review pane |
+Also add herdr-plus keybinds (`prefix+up` / `prefix+down`) — see [Herdr Plus keybinds](#herdr-plus-keybinds).
 
-After edits:
+### Azure DevOps (reviews / az-watcher / story-reap)
 
-```bash
-herdr config check
-herdr server reload-config   # or: herdr --session <name> server reload-config
-```
-
-Theme, accent, Agent Usage rows, and toast snippets below are optional polish —
-not required to create a worktree.
-
-### 4. Azure DevOps (reviews, story-reap, az-watcher)
-
-`az` is **not** installed by `install.sh`. Needed for **New Code Review**,
-**Clean Up Finished Reviews**, **Clean Up Closed Stories**, and **Sync Azure
-Reviews**:
-
-| Value | Where | Replace | Example |
-|-------|-------|---------|---------|
-| Organization URL | `az devops configure` | `https://dev.azure.com/<org>` | `https://dev.azure.com/contoso` |
-| Project name | `az devops configure` | `'<project>'` | `'MyProject'` |
-| Login identity | `az login` | your Azure account | — |
+`az` is not installed by `install.sh`:
 
 ```bash
 az login
 az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
 ```
 
-Override per run with `AZDO_ORG` / `AZDO_PROJECT` if needed. Verify with
-`az-watcher run --dry-run --window 0` (see [`az-watcher/README.md`](az-watcher/README.md)).
+## Installation
+
+```
+cd /path/to/workstation/wsl/herdr
+./install.sh
+```
+
+Idempotent; never overwrites root `config.toml`. Installs herdr (≥ 0.7.5) + CLIs, plugins (`herdr-plus`, Agent Usage, reviewr), symlinks scripts into `~/bin`, and copies quick actions + `worktree-layout.toml`.
+
+Then finish the [Prerequisites](#prerequisites--values-you-must-change) edits if you have not already.
 
 ## Herdr settings (manual `config.toml`)
 
@@ -763,7 +700,7 @@ Full details, cron line, and limitations: [`az-watcher/README.md`](az-watcher/RE
 
 Goal: confirm notes + three worktrees are created under `[worktrees].directory` with per-repo claude/cursor/bash tabs.
 
-1. Finish **Installation set-up** and the [Prerequisites](#prerequisites--values-you-must-change) edits (`SRC_ROOT`, `BRANCH_PREFIX`, `[worktrees].directory`, sidebar `$tree` rows).
+1. Finish [Prerequisites](#prerequisites--values-you-must-change) + [Installation](#installation).
 2. Clone (or place) three git repos under `SRC_ROOT`, e.g.:
    * `$SRC_ROOT/repo-a`
    * `$SRC_ROOT/repo-b`
