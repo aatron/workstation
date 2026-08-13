@@ -1,0 +1,10 @@
+# Development worktree launcher.
+# Installed by install.ps1 into herdr-plus quick-actions/.
+# Opens a real herdr tab (overlay cannot host interactive gum prompts).
+# herdr-plus runs quick-action commands via: powershell -NoProfile -NonInteractive -Command
+# (not cmd.exe), so use PowerShell syntax and {{.Home}} - not %USERPROFILE%.
+# TOML must use double-quoted strings here (single-quoted literals cannot contain ').
+name = "New Dev Worktree"
+description = "Create development worktrees for a story"
+type = "command"
+command = "& \"{{.Home}}\\bin\\worktree-launch.ps1\" development {{.WorkspaceId}} \"{{.WorkDir}}\""

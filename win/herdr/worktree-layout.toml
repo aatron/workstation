@@ -1,0 +1,38 @@
+# Worktree auto-layout applied to every repo (wildcard).
+# Installed into herdr-plus worktrees/ by install.ps1 - you do NOT need a
+# per-repo toml unless you want a repo-specific override.
+#
+# Tabs open at the worktree root when HERDR creates or opens a worktree
+# (prefix+shift+g, or the worktree picker).
+#
+# This no longer applies to story worktrees. worktree-make.ps1 stopped using
+# `herdr worktree create` - that always nests the new workspace under the repo
+# it was cut from, which is the repo-centric sidebar the story layout replaced.
+# It now runs `git worktree add` and gives the whole story ONE workspace at the
+# story root with its own notes/claude/cursor/pwsh tabs, so nothing here fires
+# for those. Kept because it is still the right layout when a worktree is opened
+# through herdr's own UI - including one of the story worktrees, which stays a
+# perfectly ordinary git worktree.
+repo = "*"
+
+# Per-repo notes: each worktree opens its own <id>-<slug>-<repo>.txt via the
+# sidecar worktree-make.ps1 writes at ../.notespath-<repo> (repo = worktree dir).
+# worktree-make.ps1 still writes those sidecars, so this keeps working.
+# PowerShell-safe: resolve the notes path then open with micro.
+[[tabs]]
+name = "notes"
+command = 'micro (Get-Content -Raw ("../.notespath-" + (Split-Path -Leaf (Get-Location)))).Trim()'
+
+# Both agents start in their auto permission mode, matching CLAUDE_CMD /
+# CURSOR_CMD at the top of worktree-make.ps1 - keep the two in sync if you
+# change one.
+[[tabs]]
+name = "claude"
+command = "claude --permission-mode auto"
+
+[[tabs]]
+name = "cursor"
+command = "agent --auto-review"
+
+[[tabs]]
+name = "pwsh"

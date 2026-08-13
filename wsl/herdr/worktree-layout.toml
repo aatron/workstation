@@ -1,0 +1,34 @@
+# Worktree auto-layout applied to every repo (wildcard).
+# Installed into herdr-plus worktrees/ by install.sh — you do NOT need a
+# per-repo toml unless you want a repo-specific override.
+#
+# Tabs open at the worktree root when herdr creates/opens a worktree.
+#
+# On create, make-worktree.sh owns the final labels AND starts the commands
+# itself (`herdr pane run` at the worktree root): notes -> "notes-{id}-{slug}"
+# running micro on that repo's notes file, claude -> "{repo} claude" running
+# `claude`, cursor -> "{repo} cursor" running `agent`, bash -> "{repo} bash".
+# Layouts cannot interpolate the repo/story name, and their tab commands below do
+# not reliably start on create — which is why the script drives them. The script
+# skips any pane that is already running something, so the commands here are a
+# harmless fallback for re-opening an existing worktree.
+repo = "*"
+
+# Per-repo notes: each worktree opens its own <id>-<slug>-<repo>.txt via the
+# sidecar make-worktree.sh writes at ../.notespath-<repo> (repo = worktree dir).
+[[tabs]]
+name = "notes"
+command = 'micro "$(cat "../.notespath-$(basename "$PWD")")"'
+
+# Both agents start in their auto permission mode, matching CLAUDE_CMD /
+# CURSOR_CMD in make-worktree.sh — keep the two in sync if you change one.
+[[tabs]]
+name = "claude"
+command = "claude --permission-mode auto"
+
+[[tabs]]
+name = "cursor"
+command = "agent --auto-review"
+
+[[tabs]]
+name = "bash"

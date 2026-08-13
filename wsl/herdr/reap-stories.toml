@@ -1,0 +1,18 @@
+# Closed-story cleanup launcher.
+# Installed by install.sh into herdr-plus quick-actions/.
+# Opens a real herdr tab so gum can ask for confirmation and the report is
+# readable.
+#
+# A plain command with no form field: there is nothing to type. story-reap.sh
+# walks development/ itself, asks Azure DevOps which pull requests each story has,
+# and proposes only the stories where there is AT LEAST ONE pull request and every
+# one of them is closed. A story with no PRs is never proposed - that is a story
+# someone just started.
+#
+# It lists everything it intends to delete and waits for confirmation. The same
+# script is what a 10-minute cron job will run with --yes once it has been trusted
+# for a while. Azure DevOps is read, never written. See story-reap.sh.
+name = "Clean Up Closed Stories"
+description = "Remove development story worktrees whose pull requests have all closed"
+type = "command"
+command = '"$HOME/bin/worktree-launch.sh" reap {{.WorkspaceId}} "{{.WorkDir}}"'

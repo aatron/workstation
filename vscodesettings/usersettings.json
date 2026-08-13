@@ -1,0 +1,147 @@
+{
+    "cursor.composer.collapsePaneInputBoxPills": true,
+    "editor.formatOnSave": true,
+    "rest-client.enableTelemetry": false,
+    "python.analysis.reportExtraTelemetry": false,
+    "editor.experimental.treeSitterTelemetry": false,
+    "dotnetAcquisitionExtension.enableTelemetry": false,
+    "[javascript]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "terminal.integrated.defaultProfile.linux": "zsh",
+    "terminal.integrated.profiles.linux": {
+      "bash": {
+        "path": "bash",
+        "icon": "terminal-bash"
+      },
+      "zsh": {
+        "path": "zsh"
+      },
+      "fish": {
+        "path": "fish"
+      },
+      "tmux": {
+        "path": "tmux",
+        "icon": "terminal-tmux"
+      },
+      "pwsh": {
+        "path": "pwsh",
+        "icon": "terminal-powershell"
+      }
+    },
+    "telemetry.feedback.enabled": false,
+    "workbench.colorCustomizations": {
+      "[Abyss]": {
+        "editor.selectionBackground": "#264A4A80",
+        "editor.selectionHighlightBackground": "#1E3A3A80",
+        "editor.wordHighlightBackground": "#1E3A3A80",
+        "editor.wordHighlightStrongBackground": "#152A2A80",
+        "editor.findMatchBackground": "#1E3A3A80",
+        "editor.findMatchHighlightBackground": "#152A2A80",
+        "diffEditor.insertedTextBackground": "#264A4A40",
+        "diffEditor.removedTextBackground": "#4A2A2A40",
+        "diffEditor.insertedLineBackground": "#264A4A20",
+        "diffEditor.removedLineBackground": "#4A2A2A20",
+        "editor.lineHighlightBackground": "#3D5A8060",
+        "editor.hoverHighlightBackground": "#3D5A8040",
+        "button.background": "#264A4A",
+        "button.foreground": "#E0E0E0",
+        "button.hoverBackground": "#2D5A5A",
+        "button.secondaryForeground": "#E0E0E0",
+        "button.secondaryBackground": "#3D5A80",
+        "button.secondaryHoverBackground": "#4D6A90"
+      }      
+    },
+    "editor.semanticTokenColorCustomizations": {
+      "enabled": true,
+      "[Abyss]": {
+        "rules": {
+          "namespace": { "foreground": "#A6B1C0", "fontStyle": "" },
+          "xmlDocCommentName": { "foreground": "#77B7FF", "fontStyle": "" },
+          "xmlDocCommentName:definition": { "foreground": "#77B7FF", "fontStyle": "" },
+          "type": { "fontStyle": "" }
+        }
+      }
+    },
+    "editor.tokenColorCustomizations": {
+      "[Abyss]": {
+        "textMateRules": [
+          {
+            "scope": [
+              "keyword",
+              "keyword.control",
+              "keyword.operator",
+              "storage.type",
+              "storage.modifier"
+            ],
+            "settings": {
+              "foreground": "#569CD6",
+              "fontStyle": ""
+            }
+          },
+          {
+            "scope": [
+              "entity.name.type",
+              "entity.name.class",
+              "entity.name.interface",
+              "entity.name.type.class",
+              "entity.name.type.interface",
+              "entity.name.type.enum",
+              "entity.name.type.parameter"
+            ],
+            "settings": {
+              "foreground": "#D4A574",
+              "fontStyle": ""
+            }
+          },
+          {
+            "scope": [
+              "entity.name.function",
+              "entity.name.method",
+              "entity.name.function.definition",
+              "entity.name.function.member"
+            ],
+            "settings": {
+              "foreground": "#D4A574",
+              "fontStyle": "bold"
+            }
+          },
+          {
+            "scope": [
+              "entity.name.type.numeric",
+              "entity.name.type.numeric.rust",
+              "entity.name.type.primitive",
+              "support.type.primitive",
+              "support.type.builtin"
+            ],
+            "settings": {
+              "foreground": "#A6B1C0",
+              "fontStyle": ""
+            }
+          },
+          {
+            "scope": [
+              "comment",
+              "comment.line",
+              "comment.block",
+              "punctuation.definition.comment"
+            ],
+            "settings": {
+              "foreground": "#7A8899",
+              "fontStyle": "italic"
+            }
+          }        
+        ]
+      }
+    },
+    "workbench.colorTheme": "Abyss",
+
+  "omnisharp.useModernNet": true,
+  "omnisharp.monoPath": "",
+  "omnisharp.enableMsBuildLoadProjectsOnDemand": false,
+  "omnisharp.sdkPath": "C:\\Program Files\\dotnet",
+  "omnisharp.sdkVersion": "10.0.101",
+  "claudeCode.preferredLocation": "panel",
+  "git.detectWorktrees": true
+  }
+  

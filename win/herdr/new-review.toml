@@ -1,0 +1,15 @@
+# Code-review launcher.
+# Installed by install.ps1 into herdr-plus quick-actions/.
+# Asks for the Azure DevOps WORK ITEM id (not the PR id) and opens a real herdr
+# tab, because the overlay cannot host the script's output.
+# herdr-plus runs quick-action commands via PowerShell -Command (see new-worktree-dev.toml).
+#
+# Read only: creates detached worktrees for the item's PRs locally and writes
+# nothing back to Azure DevOps. See review-make.ps1.
+name = "New Code Review"
+description = "Review every PR on an Azure DevOps work item, locally and read-only"
+type = "form"
+command = "& \"{{.Home}}\\bin\\worktree-launch.ps1\" new-review {{.WorkspaceId}} \"{{.WorkDir}}\" \"{{.Value}}\""
+
+[form]
+prompt = "Work item id to review"

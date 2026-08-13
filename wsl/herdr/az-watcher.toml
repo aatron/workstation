@@ -1,0 +1,10 @@
+# Azure DevOps sync launcher.
+# Installed by install.sh into herdr-plus quick-actions/.
+# Runs az-watcher once in a visible tab: creates review worktrees for PRs
+# recently assigned to you, and removes local worktrees/branches/notes/folders
+# for your PRs that were recently completed or abandoned. Non-interactive — the
+# tab exists so you can read the log; results also arrive as herdr notifications.
+name = "Sync Azure Reviews"
+description = "Create review worktrees for new assignments and clean up merged stories"
+type = "command"
+command = '"$HOME/bin/worktree-launch.sh" az-sync {{.WorkspaceId}} "{{.WorkDir}}"'
