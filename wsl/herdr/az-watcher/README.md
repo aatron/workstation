@@ -28,7 +28,7 @@ az login
 az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
 ```
 
-Also need `SRC_ROOT` / `BRANCH_PREFIX` and `[worktrees].directory` from the parent [Values you must change](../README.md#values-you-must-change). Override org/project per run with `AZDO_ORG` / `AZDO_PROJECT`.
+Also need `SRC_ROOT` / `BRANCH_PREFIX` from the parent [Prerequisites](../README.md#prerequisites--values-you-must-change) and `[worktrees].directory` from [After install](../README.md#after-install--configtoml). Override org/project per run with `AZDO_ORG` / `AZDO_PROJECT`.
 
 > **WSL note.** If `az` resolves to the Windows build under `/mnt/c`, it emits
 > CRLF and tries to encode output as cp1252 — which silently truncates JSON
