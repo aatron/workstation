@@ -21,12 +21,26 @@ exclusive lock on `%LOCALAPPDATA%\az-watcher\az-watcher.lock` (replaces Linux
 
 ## Prerequisites
 
-`az` is **not** installed by `install.ps1`. Install the Azure CLI yourself, then:
+`az` is **not** installed by `install.ps1`. Install the Azure CLI yourself, then
+set these values (placeholders are not defaults — replace them):
+
+| Value | Command / variable | Replace | Example |
+|-------|--------------------|---------|---------|
+| Login | `az login` | your Azure account | — |
+| Organization | `az devops configure … organization=` | `https://dev.azure.com/<org>` | `https://dev.azure.com/contoso` |
+| Project | `az devops configure … project=` | `'<project>'` | `'MyProject'` |
+| Optional override | `AZDO_ORG` / `AZDO_PROJECT` | same strings, per-run | — |
 
 ```powershell
 az login
 az devops configure -d organization=https://dev.azure.com/<org> project='<project>'
 ```
+
+Also required before a real sync (see the parent [Prerequisites](../README.md#prerequisites--values-you-must-change)):
+
+* `$SRC_ROOT` / `$BRANCH_PREFIX` in `worktree-make.ps1`
+* `[worktrees].directory` in `%APPDATA%\herdr\config.toml`
+* Primary clones under `SRC_ROOT\<repo>` (Azure repo spaces → underscores)
 
 Org and project come from those `az devops configure` defaults. Override per-run
 with `AZDO_ORG` / `AZDO_PROJECT`.
