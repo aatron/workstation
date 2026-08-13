@@ -1,0 +1,16 @@
+# Finished-review cleanup launcher.
+# Installed by install.sh into herdr-plus quick-actions/.
+# Opens a real herdr tab so gum can ask for confirmation and the report is
+# readable.
+#
+# Leave the field EMPTY to examine every review; type a work item id to examine
+# just that one. Either way a review is only removed once every pull request on
+# its work item has completed, and Azure DevOps is read but never written.
+# See review-remove.sh.
+name = "Clean Up Finished Reviews"
+description = "Remove local reviews whose pull requests have all completed (blank = check them all)"
+type = "form"
+command = '"$HOME/bin/worktree-launch.sh" remove-review {{.WorkspaceId}} "{{.WorkDir}}" "{{.Value}}"'
+
+[form]
+prompt = "Work item id (blank = every review)"

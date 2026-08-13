@@ -1,0 +1,7 @@
+# Development worktree launcher.
+# Installed by install.sh into herdr-plus quick-actions/.
+# Opens a real herdr tab (overlay cannot host interactive gum prompts).
+name = "New Dev Worktree"
+description = "Create development worktrees for a story"
+type = "command"
+command = '"$HOME/bin/worktree-launch.sh" development {{.WorkspaceId}} "{{.WorkDir}}"'

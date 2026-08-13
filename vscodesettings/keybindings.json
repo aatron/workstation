@@ -1,0 +1,47 @@
+// Place your key bindings in this file to override the defaults
+[
+    {
+        "key": "ctrl+i",
+        "command": "composerMode.agent"
+    },
+    {
+        "key": "ctrl+shift+t",
+        "command": "workbench.view.extension.test"
+    },
+    {
+        "key": "ctrl+e",
+        "command": "-composer.showBackgroundAgentHistory",
+        "when": "backgroundComposerEnabled || showBackgroundAgentHistoryAction"
+    },
+    {
+        "key": "ctrl+e",
+        "command": "-cursor.composer.openAgentWindow",
+        "when": "cursor.appLayoutEnabled && cursor.appLayout != 'agent'"
+    },
+    {
+        "key": "ctrl+u",
+        "command": "workbench.action.quickOpen"
+    },
+    {
+        "key": "ctrl+shift+m",
+        "command": "workbench.action.tasks.build"
+    },
+    {
+        "key": "ctrl+tab",
+        "command": "workbench.action.nextPanelView",
+        "when": "panelFocus"
+    },
+    {
+        "key": "ctrl+shift+tab",
+        "command": "workbench.action.previousPanelView",
+        "when": "panelFocus"
+    },
+    {
+        "key": "ctrl+[",
+        "command": "workbench.action.navigateBack"
+    },
+    {
+        "key": "ctrl+]",
+        "command": "workbench.action.navigateForward"
+    }
+]

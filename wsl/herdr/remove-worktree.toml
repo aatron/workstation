@@ -1,0 +1,17 @@
+# Delete-story launcher.
+# Installed by install.sh into herdr-plus quick-actions/.
+# Opens a real herdr tab and runs worktree-remove.sh with NO story id, so the
+# script offers a gum picker of the stories that actually exist on disk. That is
+# why this is a plain command and not a form: a form can only collect a typed
+# string, and it cannot enumerate anything — you had to know the id by heart and
+# a typo just reported "no story folder matching ...".
+#
+# Once a story is picked the behaviour is unchanged: every {id}-* (and legacy
+# {id}_*) story folder is found and — after a confirmation that warns the
+# worktrees themselves are deleted — each worktree is removed via herdr
+# (workspace + checkout + sidebar entry, with a git fallback), along with its
+# local branch and its notes.
+name = "Delete Story Worktree"
+description = "Pick a story worktree to remove (worktrees, local branches, and notes)"
+type = "command"
+command = '"$HOME/bin/worktree-launch.sh" remove {{.WorkspaceId}} "{{.WorkDir}}"'

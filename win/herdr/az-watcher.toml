@@ -1,0 +1,8 @@
+# Azure DevOps sync launcher.
+# Installed by install.ps1 into herdr-plus quick-actions/.
+# Runs az-watcher once in a visible tab.
+# herdr-plus runs quick-action commands via PowerShell -Command (see new-worktree-dev.toml).
+name = "Sync Azure Reviews"
+description = "Create review worktrees for new assignments and clean up merged stories"
+type = "command"
+command = "& \"{{.Home}}\\bin\\worktree-launch.ps1\" az-sync {{.WorkspaceId}} \"{{.WorkDir}}\""
