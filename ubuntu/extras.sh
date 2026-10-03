@@ -15,6 +15,10 @@ install_cursor_agent() {
 	have agent || [[ -x "$HOME/.local/bin/agent" ]] || curl -fsSL https://cursor.com/install | bash
 }
 
+install_herdr() {
+	have herdr || [[ -x "$HOME/.local/bin/herdr" ]] || curl -fsSL https://herdr.dev/install.sh | sh
+}
+
 # apt's rustup puts the cargo/rustc proxies in /usr/bin; it ships no toolchain.
 install_rust() {
 	rustc --version >/dev/null 2>&1 || rustup default stable
