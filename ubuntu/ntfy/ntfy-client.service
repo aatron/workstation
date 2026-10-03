@@ -1,0 +1,14 @@
+# Linked to ~/.config/systemd/user/ntfy-client.service by setup_ntfy_client.
+# Subscribes to the local ntfy server (topics and hooks in ~/.config/ntfy/client.yml)
+# and shows each message with notify-send, which mako (Hyprland) or GNOME displays.
+[Unit]
+Description=ntfy desktop notifications
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ntfy subscribe --from-config
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+# Fridays at 6pm, while the machine is on. No catch-up: a missed Friday is
+# skipped and the next one runs. update.sh also exits at once if the last success
+# was under 6 days ago, so a hand-run this week is not repeated.
+[Unit]
+Description=Weekly workstation update (Fridays)
+
+[Timer]
+OnCalendar=Fri *-*-* 18:00:00
+RandomizedDelaySec=30min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

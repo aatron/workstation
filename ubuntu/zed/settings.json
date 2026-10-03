@@ -2,6 +2,8 @@
 // Rust, Python and JavaScript/TypeScript are built in; Zed downloads their
 // language servers on first use. C# and TOML (Cargo.toml) need extensions.
 {
+  // Written by wallust (run `theme <name>` to change the colors).
+  "theme": "Wallust",
   "auto_install_extensions": {
     "csharp": true,
     "toml": true

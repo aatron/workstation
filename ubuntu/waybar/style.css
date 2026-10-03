@@ -1,0 +1,47 @@
+/* Waybar style — symlinked to ~/.config/waybar/style.css by install.sh.
+   colors.css is rendered by wallust (see theme/). */
+@import url("colors.css");
+
+* {
+    font-family: "JetBrains Mono", sans-serif;
+    font-size: 13px;
+    border: none;
+    border-radius: 0;
+    min-height: 0;
+}
+
+window#waybar {
+    background: alpha(@background, 0.92);
+    color: @foreground;
+    border-bottom: 2px solid @color6;
+}
+
+#workspaces button {
+    padding: 0 8px;
+    color: @foreground;
+    background: transparent;
+}
+
+#workspaces button.active {
+    color: @background;
+    background: @color6;
+}
+
+#workspaces button.urgent {
+    color: @background;
+    background: @color1;
+}
+
+#custom-launcher {
+    padding: 0 12px;
+    color: @background;
+    background: @color6;
+}
+
+#clock, #cpu, #memory, #pulseaudio, #network, #tray {
+    padding: 0 10px;
+}
+
+#pulseaudio.muted {
+    color: @color8;
+}

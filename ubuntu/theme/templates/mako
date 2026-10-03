@@ -1,0 +1,8 @@
+# Rendered by wallust to ~/.config/mako/config.
+background-color={{ background }}
+text-color={{ foreground }}
+border-color={{ color6 }}
+progress-color=over {{ color0 }}
+border-size=2
+padding=12
+default-timeout=8000

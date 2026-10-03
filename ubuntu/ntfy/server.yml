@@ -1,0 +1,6 @@
+# ntfy server — installed to /etc/ntfy/server.yml by install_ntfy.
+# Local only: listens on loopback, so nothing off this machine can reach it
+# (and the phone app can't either, until this is exposed on purpose).
+base-url: "http://127.0.0.1:2586"
+listen-http: "127.0.0.1:2586"
+cache-file: "/var/lib/ntfy/cache.db"

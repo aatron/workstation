@@ -8,6 +8,7 @@ gpg
 zoxide
 fzf
 jq
+unzip
 graphicsmagick
 
 # Programming languages and build tools (installed before any IDE)
@@ -16,20 +17,20 @@ python3
 python3-pip
 python3-venv
 pipx
-nodejs
-npm
-dotnet-sdk-10.0
 rustup
 
-# Terminal
-ghostty
-
-# Hyprland desktop
-hyprland
+# Hyprland desktop (Hyprland and its libraries/tools are built from source, see extras.sh)
 waybar
-xdg-desktop-portal-hyprland
-hyprpolkitagent
+grim
+slurp
+cliphist
+brightnessctl
+playerctl
+pavucontrol
+blueman
+xdg-desktop-portal-gtk
 mako-notifier
+libnotify-bin
 fuzzel
 wl-clipboard
 network-manager-gnome
@@ -39,3 +40,5 @@ qtwayland5
 qt6-wayland
 fonts-font-awesome
 fonts-jetbrains-mono
+libreoffice
+onedrive
