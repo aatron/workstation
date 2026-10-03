@@ -20,3 +20,4 @@ qtwayland5
 qt6-wayland
 fonts-font-awesome
 fonts-jetbrains-mono
+fzf

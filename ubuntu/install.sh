@@ -17,6 +17,7 @@ source "$SCRIPT_DIR/extras.sh"
 install_claude_code
 install_cursor_agent
 install_cursor
+install_zed
 setup_zoxide
 setup_firefox
 setup_ghostty
