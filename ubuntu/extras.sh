@@ -49,6 +49,20 @@ install_cursor() {
 	sudo apt-get install -y cursor
 }
 
+# Link the repo's settings.json / keybindings.json into Cursor's User dir, so
+# edits made in Cursor land in the repo. An existing real file is kept as .bak.
+setup_cursor_settings() {
+	local src dir f
+	src="$(cd "$SCRIPT_DIR/../vscodesettings" && pwd)"
+	dir="${XDG_CONFIG_HOME:-$HOME/.config}/Cursor/User"
+	mkdir -p "$dir"
+	for pair in usersettings.json:settings.json keybindings.json:keybindings.json; do
+		f="$dir/${pair#*:}"
+		[[ -f "$f" && ! -L "$f" ]] && mv "$f" "$f.bak"
+		ln -sfn "$src/${pair%%:*}" "$f"
+	done
+}
+
 setup_zoxide() {
 	bashrc_line 'eval "$(zoxide init bash)"'
 }
