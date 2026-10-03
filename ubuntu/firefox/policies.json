@@ -1,0 +1,28 @@
+{
+  "policies": {
+    "ExtensionSettings": {
+      "search@kagi.com": {
+        "installation_mode": "normal_installed",
+        "install_url": "https://addons.mozilla.org/firefox/downloads/latest/search@kagi.com/latest.xpi",
+        "private_browsing": true
+      },
+      "support@lastpass.com": {
+        "installation_mode": "normal_installed",
+        "install_url": "https://addons.mozilla.org/firefox/downloads/latest/support@lastpass.com/latest.xpi",
+        "default_area": "navbar"
+      }
+    },
+    "SearchEngines": {
+      "Add": [
+        {
+          "Name": "Kagi",
+          "URLTemplate": "https://kagi.com/search?q={searchTerms}",
+          "SuggestURLTemplate": "https://kagisuggest.com/api/autosuggest?q={searchTerms}",
+          "IconURL": "https://kagi.com/favicon.ico",
+          "Alias": "@kagi"
+        }
+      ],
+      "Default": "Kagi"
+    }
+  }
+}

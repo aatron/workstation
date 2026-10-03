@@ -1,0 +1,7 @@
+vim
+git
+micro
+curl
+ca-certificates
+gpg
+zoxide

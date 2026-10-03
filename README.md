@@ -5,6 +5,7 @@ Shared editor settings and Herdr worktree workflows.
 | Path | What |
 |------|------|
 | [vscodesettings/](vscodesettings/) | Cursor / VS Code user settings and keybindings |
+| [ubuntu/](ubuntu/) | Ubuntu install script and apt packages |
 | [wsl/herdr/](wsl/herdr/) | Herdr scripts and install for WSL |
 | [win/herdr/](win/herdr/) | Herdr scripts and install for Windows |
 
