@@ -5,3 +5,4 @@ curl
 ca-certificates
 gpg
 zoxide
+ghostty

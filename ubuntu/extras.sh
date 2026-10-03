@@ -43,3 +43,21 @@ setup_zoxide() {
 setup_firefox() {
 	sudo install -D -m 644 "$SCRIPT_DIR/firefox/policies.json" /etc/firefox/policies/policies.json
 }
+
+# Ghostty: repo config, Gogh color theme, and default terminal (Ctrl+Alt+T).
+GOGH_THEME=nord
+setup_ghostty() {
+	local dir="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
+	mkdir -p "$dir"
+	[[ -f "$dir/config.ghostty" && ! -L "$dir/config.ghostty" ]] && mv "$dir/config.ghostty" "$dir/config.ghostty.bak"
+	ln -sfn "$SCRIPT_DIR/ghostty/config.ghostty" "$dir/config.ghostty"
+
+	local tmp
+	tmp="$(mktemp -d)"
+	curl -fsSL -o "$tmp/apply-colors.sh" https://github.com/Gogh-Co/Gogh/raw/master/apply-colors.sh
+	curl -fsSL -o "$tmp/theme.sh" "https://github.com/Gogh-Co/Gogh/raw/master/installs/$GOGH_THEME.sh"
+	TERMINAL=ghostty GOGH_NONINTERACTIVE=1 GOGH_APPLY_SCRIPT="$tmp/apply-colors.sh" bash "$tmp/theme.sh"
+	rm -rf "$tmp"
+
+	echo com.mitchellh.ghostty.desktop > "${XDG_CONFIG_HOME:-$HOME/.config}/xdg-terminals.list"
+}
