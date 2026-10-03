@@ -20,5 +20,6 @@ install_cursor
 setup_zoxide
 setup_firefox
 setup_ghostty
+setup_hyprland
 
 sudo apt-get autoremove -y

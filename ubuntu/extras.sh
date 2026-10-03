@@ -61,3 +61,13 @@ setup_ghostty() {
 
 	echo com.mitchellh.ghostty.desktop > "${XDG_CONFIG_HOME:-$HOME/.config}/xdg-terminals.list"
 }
+
+# Hyprland: repo config. Waybar uses its packaged default (/etc/xdg/waybar)
+# until ~/.config/waybar exists. Hyprland shows up as a login-screen session
+# alongside GNOME.
+setup_hyprland() {
+	local dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+	mkdir -p "$dir"
+	[[ -f "$dir/hyprland.conf" && ! -L "$dir/hyprland.conf" ]] && mv "$dir/hyprland.conf" "$dir/hyprland.conf.bak"
+	ln -sfn "$SCRIPT_DIR/hypr/hyprland.conf" "$dir/hyprland.conf"
+}
