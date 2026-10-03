@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# theme <name> — switch the desktop theme. Linked to ~/.local/bin/theme.
+# Renders every wallust template from colorschemes/<name>.json, then reloads
+# whatever is running. Kitty windows, Waybar, mako and Hyprland update at once;
+# Zed picks up its theme file; Cursor and Firefox are not themed by this.
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+
+dir="$HOME/.config/wallust/colorschemes"
+name="${1:-}"
+
+if [[ -z "$name" || ! -f "$dir/$name.json" ]]; then
+	echo "usage: theme <name>" >&2
+	echo "themes: $(cd "$dir" && ls *.json | sed 's/\.json$//' | paste -sd' ')" >&2
+	exit 1
+fi
+
+wallust cs "$name"
+
+mkdir -p "$HOME/.local/state"
+echo "$name" > "$HOME/.local/state/theme"
+
+pkill -USR1 -x kitty || true
+pkill -USR2 -x waybar || true
+makoctl reload 2>/dev/null || true
+hyprctl reload >/dev/null 2>&1 || true

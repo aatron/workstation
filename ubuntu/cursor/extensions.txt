@@ -1,5 +1,6 @@
 # Cursor extensions (Cursor marketplace IDs). Installed by install_cursor_extensions.
-# Not here: Filter Lens (no match found in Cursor's marketplace).
+# Not here: Filter Lens (no match found in Cursor's marketplace). Pylance is
+# listed as anysphere.cursorpyright: Cursor installs that in its place.
 
 # Essential
 usernamehw.errorlens
@@ -15,7 +16,7 @@ rust-lang.rust-analyzer
 anysphere.csharp
 
 # Python
-ms-python.vscode-pylance
+anysphere.cursorpyright
 charliermarsh.ruff
 ms-python.python
 ms-python.debugpy

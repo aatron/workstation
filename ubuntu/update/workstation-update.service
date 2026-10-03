@@ -1,0 +1,15 @@
+# Installed to /etc/systemd/system/ by setup_updates (@USER@ and @SCRIPT_DIR@ filled in).
+[Unit]
+Description=Weekly workstation update (apt, snap, languages, Hyprland)
+After=network-online.target ntfy.service
+Wants=network-online.target
+OnFailure=workstation-update-failed.service
+
+[Service]
+Type=oneshot
+Environment=WORKSTATION_USER=@USER@
+ExecStart=@SCRIPT_DIR@/update.sh
+TimeoutStartSec=4h
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20

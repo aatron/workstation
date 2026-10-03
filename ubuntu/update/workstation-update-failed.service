@@ -1,0 +1,9 @@
+# Installed to /etc/systemd/system/ by setup_updates (@NTFY_URL@ and @NTFY_TOPIC@
+# filled in). Started by OnFailure= on workstation-update.service: the update crashed,
+# timed out, or could not send its own summary.
+[Unit]
+Description=Notify that the weekly workstation update failed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl -fsS -H "Title: Weekly update crashed" -H "Priority: 5" -d "workstation-update.service failed or timed out. See: journalctl -u workstation-update" @NTFY_URL@/@NTFY_TOPIC@

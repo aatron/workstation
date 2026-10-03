@@ -1,0 +1,24 @@
+// Waybar config — symlinked to ~/.config/waybar/config.jsonc by install.sh.
+// Text only (no icon fonts), so nothing depends on a Nerd Font.
+{
+  "layer": "top",
+  "position": "top",
+  "height": 30,
+  "spacing": 4,
+  "modules-left": ["custom/launcher", "hyprland/workspaces", "hyprland/window"],
+  "modules-center": ["clock"],
+  "modules-right": ["pulseaudio", "network", "cpu", "memory", "tray"],
+  "custom/launcher": { "format": "Apps", "tooltip": false, "on-click": "fuzzel" },
+  "hyprland/window": { "max-length": 60 },
+  "clock": { "format": "{:%a %b %d  %H:%M}" },
+  "cpu": { "format": "CPU {usage}%" },
+  "memory": { "format": "MEM {percentage}%" },
+  "pulseaudio": { "format": "VOL {volume}%", "format-muted": "MUTED", "on-click": "pavucontrol" },
+  "network": {
+    "format-wifi": "{essid}",
+    "format-ethernet": "ETH",
+    "format-disconnected": "offline",
+    "on-click": "nm-connection-editor"
+  },
+  "tray": { "spacing": 8 }
+}
