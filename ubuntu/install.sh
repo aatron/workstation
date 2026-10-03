@@ -14,15 +14,22 @@ sudo apt-get upgrade -y
 grep -vE '^\s*(#|$)' "$SCRIPT_DIR/apt-packages.txt" | xargs sudo apt-get install -y
 
 source "$SCRIPT_DIR/extras.sh"
+
+# Languages first (apt ones are in apt-packages.txt), so IDEs find them.
 install_rust
+
 install_claude_code
 install_cursor_agent
 install_herdr
+
+# IDEs
 install_cursor
 install_cursor_extensions
 install_zed
 setup_cursor_settings
 setup_zed_settings
+
+# Desktop and terminal
 setup_zoxide
 setup_firefox
 setup_ghostty

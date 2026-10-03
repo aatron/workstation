@@ -1,5 +1,5 @@
-# Cursor extensions (Open VSX IDs). Installed by install_cursor_extensions.
-# Not here: Pylance (not on Open VSX) and Filter Lens (ID unknown).
+# Cursor extensions (Cursor marketplace IDs). Installed by install_cursor_extensions.
+# Not here: Filter Lens (no match found in Cursor's marketplace).
 
 # Essential
 usernamehw.errorlens
@@ -11,7 +11,11 @@ serayuzgur.crates
 tamasfe.even-better-toml
 rust-lang.rust-analyzer
 
+# C#
+anysphere.csharp
+
 # Python
+ms-python.vscode-pylance
 charliermarsh.ruff
 ms-python.python
 ms-python.debugpy
