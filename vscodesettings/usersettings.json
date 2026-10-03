@@ -8,6 +8,7 @@
     "[javascript]": {
       "editor.defaultFormatter": "esbenp.prettier-vscode"
     },
+    "terminal.integrated.defaultProfile.linux": "zsh",
     "terminal.integrated.profiles.linux": {
       "bash": {
         "path": "bash",
