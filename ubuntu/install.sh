@@ -19,8 +19,10 @@ install_claude_code
 install_cursor_agent
 install_herdr
 install_cursor
+install_cursor_extensions
 install_zed
 setup_cursor_settings
+setup_zed_settings
 setup_zoxide
 setup_firefox
 setup_ghostty
