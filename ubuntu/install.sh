@@ -14,6 +14,7 @@ sudo apt-get upgrade -y
 grep -vE '^\s*(#|$)' "$SCRIPT_DIR/apt-packages.txt" | xargs sudo apt-get install -y
 
 source "$SCRIPT_DIR/extras.sh"
+install_rust
 install_claude_code
 install_cursor_agent
 install_cursor
