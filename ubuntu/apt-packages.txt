@@ -30,4 +30,5 @@ nodejs
 npm
 dotnet-sdk-10.0
 rustup
-zsh
+graphicsmagick
+jq
