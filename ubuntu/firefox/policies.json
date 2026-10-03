@@ -23,6 +23,18 @@
         }
       ],
       "Default": "Kagi"
+    },
+    "Homepage": {
+      "URL": "about:blank",
+      "StartPage": "homepage"
+    },
+    "NewTabPage": false,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "UserMessaging": {
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "SkipOnboarding": true
     }
   }
 }

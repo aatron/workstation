@@ -15,6 +15,12 @@ install_cursor_agent() {
 	have agent || [[ -x "$HOME/.local/bin/agent" ]] || curl -fsSL https://cursor.com/install | bash
 }
 
+# Zed has no apt/snap package; the official installer is per-user (~/.local/zed.app)
+# and Zed updates itself.
+install_zed() {
+	have zed || [[ -x "$HOME/.local/bin/zed" ]] || curl -fsSL https://zed.dev/install.sh | sh
+}
+
 # Matches the repo file Cursor's own postinst writes, so the two never conflict.
 install_cursor() {
 	if [[ ! -f /usr/share/keyrings/anysphere.gpg ]]; then
