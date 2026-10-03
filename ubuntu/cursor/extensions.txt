@@ -1,0 +1,17 @@
+# Cursor extensions (Open VSX IDs). Installed by install_cursor_extensions.
+# Not here: Pylance (not on Open VSX) and Filter Lens (ID unknown).
+
+# Essential
+usernamehw.errorlens
+esbenp.prettier-vscode
+
+# Rust
+vadimcn.vscode-lldb
+serayuzgur.crates
+tamasfe.even-better-toml
+rust-lang.rust-analyzer
+
+# Python
+charliermarsh.ruff
+ms-python.python
+ms-python.debugpy

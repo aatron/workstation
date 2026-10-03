@@ -49,6 +49,15 @@ install_cursor() {
 	sudo apt-get install -y cursor
 }
 
+# Install the IDs listed in cursor/extensions.txt that Cursor doesn't have yet.
+install_cursor_extensions() {
+	local installed ext
+	installed="$(cursor --list-extensions 2>/dev/null || true)"
+	while read -r ext; do
+		grep -qixF "$ext" <<<"$installed" || cursor --install-extension "$ext" || echo "warning: could not install Cursor extension $ext" >&2
+	done < <(grep -vE '^\s*(#|$)' "$SCRIPT_DIR/cursor/extensions.txt")
+}
+
 # Link ubuntu/cursor/{settings,keybindings}.json into Cursor's User dir, so edits
 # made in Cursor land in the repo. An existing real file is kept as .bak.
 # (Separate from vscodesettings/, which is shared with Windows/WSL.)
@@ -61,6 +70,15 @@ setup_cursor_settings() {
 		[[ -f "$f" && ! -L "$f" ]] && mv "$f" "$f.bak"
 		ln -sfn "$SCRIPT_DIR/cursor/$name" "$f"
 	done
+}
+
+# Link ubuntu/zed/settings.json (installs the C# and TOML extensions on first
+# launch). An existing real file is kept as .bak.
+setup_zed_settings() {
+	local dir="${XDG_CONFIG_HOME:-$HOME/.config}/zed"
+	mkdir -p "$dir"
+	[[ -f "$dir/settings.json" && ! -L "$dir/settings.json" ]] && mv "$dir/settings.json" "$dir/settings.json.bak"
+	ln -sfn "$SCRIPT_DIR/zed/settings.json" "$dir/settings.json"
 }
 
 setup_zoxide() {

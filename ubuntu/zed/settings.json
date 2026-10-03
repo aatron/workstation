@@ -1,0 +1,9 @@
+// Zed user settings — symlinked to ~/.config/zed/settings.json by install.sh.
+// Rust, Python and JavaScript/TypeScript are built in; Zed downloads their
+// language servers on first use. C# and TOML (Cargo.toml) need extensions.
+{
+  "auto_install_extensions": {
+    "csharp": true,
+    "toml": true
+  }
+}
