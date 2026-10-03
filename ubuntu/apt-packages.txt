@@ -1,3 +1,4 @@
+# Base
 vim
 git
 micro
@@ -5,7 +6,25 @@ curl
 ca-certificates
 gpg
 zoxide
+fzf
+jq
+graphicsmagick
+
+# Programming languages and build tools (installed before any IDE)
+build-essential
+python3
+python3-pip
+python3-venv
+pipx
+nodejs
+npm
+dotnet-sdk-10.0
+rustup
+
+# Terminal
 ghostty
+
+# Hyprland desktop
 hyprland
 waybar
 xdg-desktop-portal-hyprland
@@ -20,15 +39,3 @@ qtwayland5
 qt6-wayland
 fonts-font-awesome
 fonts-jetbrains-mono
-fzf
-build-essential
-python3
-python3-pip
-python3-venv
-pipx
-nodejs
-npm
-dotnet-sdk-10.0
-rustup
-graphicsmagick
-jq
