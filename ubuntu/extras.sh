@@ -15,6 +15,11 @@ install_cursor_agent() {
 	have agent || [[ -x "$HOME/.local/bin/agent" ]] || curl -fsSL https://cursor.com/install | bash
 }
 
+# apt's rustup puts the cargo/rustc proxies in /usr/bin; it ships no toolchain.
+install_rust() {
+	rustc --version >/dev/null 2>&1 || rustup default stable
+}
+
 # Zed has no apt/snap package; the official installer is per-user (~/.local/zed.app)
 # and Zed updates itself.
 install_zed() {
