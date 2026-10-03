@@ -6,3 +6,17 @@ ca-certificates
 gpg
 zoxide
 ghostty
+hyprland
+waybar
+xdg-desktop-portal-hyprland
+hyprpolkitagent
+mako-notifier
+fuzzel
+wl-clipboard
+network-manager-gnome
+pipewire
+wireplumber
+qtwayland5
+qt6-wayland
+fonts-font-awesome
+fonts-jetbrains-mono
