@@ -1,0 +1,17 @@
+# Ghostty config — symlinked to ~/.config/ghostty/config.ghostty by install.sh,
+# so edits here apply on the next Ghostty reload (ctrl+shift+,).
+
+# Gogh theme, installed into ~/.config/ghostty/themes by install.sh.
+theme = Gogh Nord
+
+# Selecting text copies it to the clipboard; Ctrl+V pastes.
+copy-on-select = clipboard
+keybind = ctrl+v=paste_from_clipboard
+
+# Over SSH, send TERM=xterm-256color so remote hosts and VMs that lack
+# Ghostty's terminfo (xterm-ghostty) still handle backspace, clear, vim, etc.
+shell-integration-features = ssh-env
+
+# Lets `ghostty +list-themes` save a picked theme. Gogh appends this line when
+# it is missing, so keeping it here stops Gogh editing this file.
+config-file = ?auto/theme.ghostty

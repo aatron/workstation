@@ -19,6 +19,6 @@ install_cursor_agent
 install_cursor
 setup_zoxide
 setup_firefox
-"$SCRIPT_DIR/terminal.sh"
+setup_ghostty
 
 sudo apt-get autoremove -y
