@@ -748,6 +748,11 @@ setup_hyprland() {
 	ln -sfn "$SCRIPT_DIR/hypr/common" "$dir/common"
 	ln -sfn "$SCRIPT_DIR/hypr/profiles" "$dir/profiles"
 	ln -sfn "$SCRIPT_DIR/hypr/scripts/hypr-profile" "$HOME/.local/bin/hypr-profile"
+	ln -sfn "$SCRIPT_DIR/hypr/scripts/hypr-stretch" "$HOME/.local/bin/hypr-stretch"
+	# Hyprland's own PATH lacks ~/.local/bin (a GDM session is not a login shell), so
+	# nothing it launches could find kitty and the other tools installed there. Its
+	# `env` keyword does not expand $HOME or $PATH, hence a generated file.
+	printf 'env = PATH,%s\n' "$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin" >"$dir/env.conf"
 	profile="$(select_hypr_profile "$dir")"
 	if [[ -f "$dir/local-profiles/$profile.conf" ]]; then
 		ln -sfn "$dir/local-profiles/$profile.conf" "$dir/profile.conf"
