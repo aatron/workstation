@@ -1,5 +1,6 @@
 # Wallpapers
 
-Put desktop background images here. `WALLPAPER` in `../extras.sh` names the one
-that `install.sh` applies to GNOME and Hyprland (hyprpaper). Until that file
-exists, the wallpaper step is skipped.
+Desktop background images. `setup_wallpaper` in `../extras.sh` applies
+`TronForestLeft.png` to the left monitor (HDMI-A-1) and `TronForestRight.png` to
+the right one (DP-1) under Hyprland (hyprpaper); GNOME gets the left image. Until
+both files exist, the wallpaper step is skipped.

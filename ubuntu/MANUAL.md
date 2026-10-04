@@ -19,8 +19,8 @@ and its libraries are compiled from source (see `extras.sh`). When it finishes, 
 notification pops up and `verify.sh` lists anything that failed.
 
 Then log out and choose nothing: Hyprland is already the preselected session (GNOME
-stays in the gear menu). Add a wallpaper by dropping `desktop.jpg` into
-`ubuntu/wallpapers/` and running `./ubuntu/install.sh setup_wallpaper`.
+stays in the gear menu). The wallpapers (`TronForestLeft.png`, `TronForestRight.png`) live in
+`ubuntu/wallpapers/`; reapply them with `./ubuntu/install.sh setup_wallpaper`.
 
 Everything in the install is pinned or floats to the latest stable on purpose: apt
 packages and the language toolchains (rust, node LTS, python, .NET) are the newest at
