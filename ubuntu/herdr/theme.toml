@@ -1,0 +1,6 @@
+# Sidebar contrast: the default catppuccin rows are dark purple and blend into the
+# panel. active_row_bg is the active Space / focused Agent row; selection_bg is the
+# Navigate-mode cursor row. Different hues so the two are told apart at a glance.
+[theme.custom]
+active_row_bg = "#2d5fa8"
+selection_bg  = "#a8641a"

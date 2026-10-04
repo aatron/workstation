@@ -81,7 +81,7 @@ section "Commands"
 for pair in \
 	git:apt_packages gh:apt_packages vim:apt_packages micro:apt_packages curl:apt_packages jq:apt_packages \
 	fzf:apt_packages zoxide:apt_packages gm:apt_packages python3:apt_packages pipx:apt_packages \
-	node:install_node npm:install_node uv:install_python dotnet:install_dotnet cargo:install_rust aspire:install_aspire \
+	node:install_node npm:install_node uv:install_python dotnet:install_dotnet cargo:install_rust go:install_go aspire:install_aspire \
 	wallust:install_wallust claude:install_claude_code agent:install_cursor_agent \
 	herdr:install_herdr playwright-cli:install_playwright_cli az:install_azure_cli cursor:install_cursor zed:install_zed \
 	kitty:install_kitty kitten:install_kitty theme:setup_theme Hyprland:install_hyprland \
@@ -120,6 +120,10 @@ for f in "$CFG/hypr/colors.conf" "$CFG/fuzzel/fuzzel.ini" "$CFG/mako/config" "$C
 done
 
 section "Configs parse"
+check install_herdr_plus "the herdr-plus plugin is installed" bash -c "herdr plugin list | grep -q cloudmanic.herdr-plus"
+check install_herdr_navigator "the herdr-navigator plugin is installed" bash -c "herdr plugin list | grep -q herdr-navigator"
+check setup_herdr_config "herdr keybindings are in config.toml" has_text "$CFG/herdr/config.toml" "BEGIN workstation herdr keys"
+check setup_herdr_config "herdr theme is in config.toml" has_text "$CFG/herdr/config.toml" "BEGIN workstation herdr theme"
 check setup_hyprland "a Hyprland monitor profile is selected (hypr-profile lists them)" test -e "$CFG/hypr/profile.conf"
 check setup_hyprland "Hyprland accepts hyprland.conf (incl. profile, common/ and colors.conf)" hyprland_config_ok
 check setup_firefox "Firefox policies deployed and identical to the repo" \

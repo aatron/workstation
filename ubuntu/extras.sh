@@ -44,6 +44,62 @@ install_herdr() {
 	have herdr || [[ -x "$HOME/.local/bin/herdr" ]] || curl -fsSL https://herdr.dev/install.sh | sh
 }
 
+# herdr-plus: the plugin only. The quick actions and scripts you run through it
+# are yours to write (~/.config/herdr/plugins/config/cloudmanic.herdr-plus/);
+# nothing from this repo's wsl/ or win/ herdr folders is installed. Needs herdr.
+install_herdr_plus() {
+	local herdr="$HOME/.local/bin/herdr"
+	have herdr && herdr="$(command -v herdr)"
+	"$herdr" plugin list 2>/dev/null | grep -q 'cloudmanic.herdr-plus' ||
+		"$herdr" plugin install cloudmanic/herdr-plus --yes
+}
+
+# herdr-navigator (third party, MIT): a fuzzy "jump to anything" overlay for
+# workspaces, agents, projects and directories, opened with prefix+t (herdr/keys.toml).
+# Pinned to the v0.3.6 commit; its manifest and dependencies were read first. herdr
+# builds it with cargo (install_rust first). Bump the rev only after reading the diff.
+HERDR_NAVIGATOR_REV=e12a97c5d9ddcd76ba18c985909ffeb4827afa6a
+install_herdr_navigator() {
+	local herdr="$HOME/.local/bin/herdr"
+	have herdr && herdr="$(command -v herdr)"
+	"$herdr" plugin list 2>/dev/null | grep -q 'herdr-navigator' ||
+		"$herdr" plugin install thanhdat77/herdr-navigator --ref "$HERDR_NAVIGATOR_REV" --yes
+}
+
+# herdr settings kept as marked blocks inside ~/.config/herdr/config.toml, so the
+# rest of that file stays yours; re-running replaces just the blocks:
+#   herdr/keys.toml   tab and workspace navigation ([keys])
+#   herdr/theme.toml  sidebar contrast ([theme.custom])
+# If the file already has its own table of that name it is left alone (TOML allows
+# only one) and a note is printed.
+HERDR_KEYS_BEGIN="# BEGIN workstation herdr keys"
+HERDR_KEYS_END="# END workstation herdr keys"
+HERDR_THEME_BEGIN="# BEGIN workstation herdr theme"
+HERDR_THEME_END="# END workstation herdr theme"
+# merge_herdr_block CONFIG BEGIN END SOURCE TABLE_REGEX TABLE_NAME
+merge_herdr_block() {
+	local cfg="$1" begin="$2" end="$3" src="$4" table_re="$5" table="$6" tmp
+	tmp="$(mktemp)"
+	awk -v b="$begin" -v e="$end" \
+		'$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$cfg" >"$tmp"
+	if grep -qE "$table_re" "$tmp"; then
+		echo "note: $cfg has its own $table table; add ${src#"$SCRIPT_DIR"/} to it by hand" >&2
+		rm -f "$tmp"
+		return 0
+	fi
+	[[ -s $tmp ]] && printf '\n' >>"$tmp"
+	{ echo "$begin"; cat "$src"; echo "$end"; } >>"$tmp"
+	cat "$tmp" >"$cfg"
+	rm -f "$tmp"
+}
+setup_herdr_config() {
+	local cfg="${HERDR_CONFIG_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/config.toml}"
+	mkdir -p "$(dirname "$cfg")"
+	touch "$cfg"
+	merge_herdr_block "$cfg" "$HERDR_KEYS_BEGIN" "$HERDR_KEYS_END" "$SCRIPT_DIR/herdr/keys.toml" '^\[keys\]' '[keys]'
+	merge_herdr_block "$cfg" "$HERDR_THEME_BEGIN" "$HERDR_THEME_END" "$SCRIPT_DIR/herdr/theme.toml" '^\[theme\.custom\]' '[theme.custom]'
+}
+
 # apt's rustup puts the cargo/rustc proxies in /usr/bin; it ships no toolchain.
 install_rust() {
 	rustc --version >/dev/null 2>&1 || rustup default stable
@@ -592,6 +648,32 @@ install_dotnet() {
 	rm -rf "$tmp"
 	mkdir -p "$HOME/.local/bin"
 	ln -sfn "$HOME/.dotnet/dotnet" "$HOME/.local/bin/dotnet"
+}
+
+# Go: the newest stable release from go.dev, checked against the published sha256,
+# unpacked into ~/.local/go (replacing the previous one). go and gofmt are linked
+# into ~/.local/bin, and `go install` puts binaries there too (GOBIN).
+install_go() {
+	local goarch tmp meta ver file sha
+	case "$(uname -m)" in
+		x86_64) goarch=amd64 ;;
+		aarch64) goarch=arm64 ;;
+		*) echo "no Go build for $(uname -m)" >&2; return 1 ;;
+	esac
+	tmp="$(mktemp -d)"
+	meta="$(curl -fsSL "https://go.dev/dl/?mode=json")"
+	read -r ver file sha < <(jq -r --arg a "$goarch" \
+		'.[0] | .version as $v | .files[] | select(.os == "linux" and .arch == $a and .kind == "archive") | "\($v) \(.filename) \(.sha256)"' <<<"$meta")
+	[[ -n "${file:-}" && -n "${sha:-}" ]] || { echo "could not find the latest Go release for $goarch" >&2; rm -rf "$tmp"; return 1; }
+	curl -fsSL "https://go.dev/dl/$file" -o "$tmp/$file"
+	echo "$sha  $tmp/$file" | sha256sum -c - || { rm -rf "$tmp"; return 1; }
+	rm -rf "$HOME/.local/go"
+	tar -C "$HOME/.local" -xzf "$tmp/$file"
+	rm -rf "$tmp"
+	mkdir -p "$HOME/.local/bin"
+	ln -sfn "$HOME/.local/go/bin/go" "$HOME/.local/bin/go"
+	ln -sfn "$HOME/.local/go/bin/gofmt" "$HOME/.local/bin/gofmt"
+	"$HOME/.local/bin/go" env -w GOBIN="$HOME/.local/bin"
 }
 
 # Aspire CLI (Microsoft): standalone binary from the official script, in
