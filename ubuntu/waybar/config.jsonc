@@ -7,7 +7,19 @@
   "spacing": 4,
   "modules-left": ["custom/launcher", "hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["pulseaudio", "network", "cpu", "memory", "tray"],
+  "modules-right": ["custom/claude", "custom/cursor", "pulseaudio", "network", "cpu", "memory", "tray"],
+  "custom/claude": {
+    "exec": "$HOME/.local/bin/ai-usage claude",
+    "return-type": "json",
+    "interval": 120,
+    "on-click": "xdg-open https://claude.ai/settings/usage"
+  },
+  "custom/cursor": {
+    "exec": "$HOME/.local/bin/ai-usage cursor",
+    "return-type": "json",
+    "interval": 120,
+    "on-click": "xdg-open https://cursor.com/dashboard"
+  },
   "custom/launcher": { "format": "Apps", "tooltip": false, "on-click": "fuzzel" },
   "hyprland/window": { "max-length": 60 },
   "clock": { "format": "{:%a %b %d  %H:%M}" },

@@ -81,9 +81,9 @@ section "Commands"
 for pair in \
 	git:apt_packages gh:apt_packages vim:apt_packages micro:apt_packages curl:apt_packages jq:apt_packages \
 	fzf:apt_packages zoxide:apt_packages gm:apt_packages python3:apt_packages pipx:apt_packages \
-	node:install_node npm:install_node uv:install_python dotnet:install_dotnet cargo:install_rust \
+	node:install_node npm:install_node uv:install_python dotnet:install_dotnet cargo:install_rust aspire:install_aspire \
 	wallust:install_wallust claude:install_claude_code agent:install_cursor_agent \
-	herdr:install_herdr az:install_azure_cli cursor:install_cursor zed:install_zed \
+	herdr:install_herdr playwright-cli:install_playwright_cli az:install_azure_cli cursor:install_cursor zed:install_zed \
 	kitty:install_kitty kitten:install_kitty theme:setup_theme Hyprland:install_hyprland \
 	waybar:apt_packages mako:apt_packages fuzzel:apt_packages firefox:setup_firefox; do
 	check "${pair#*:}" "${pair%%:*} on PATH" command -v "${pair%%:*}"
@@ -97,6 +97,9 @@ while read -r link src step; do
 done <<EOF2
 $CFG/kitty/kitty.conf kitty/kitty.conf setup_kitty
 $CFG/hypr/hyprland.conf hypr/hyprland.conf setup_hyprland
+$CFG/hypr/common hypr/common setup_hyprland
+$CFG/hypr/profiles hypr/profiles setup_hyprland
+$HOME/.local/bin/hypr-profile hypr/scripts/hypr-profile setup_hyprland
 $CFG/Cursor/User/settings.json cursor/settings.json setup_cursor_settings
 $CFG/Cursor/User/keybindings.json cursor/keybindings.json setup_cursor_settings
 $CFG/zed/settings.json zed/settings.json setup_zed_settings
@@ -106,6 +109,7 @@ $CFG/wallust/colorschemes theme/colorschemes setup_theme
 $CFG/waybar/config.jsonc waybar/config.jsonc setup_theme
 $CFG/waybar/style.css waybar/style.css setup_theme
 $HOME/.local/bin/theme theme/theme setup_theme
+$HOME/.local/bin/ai-usage waybar/ai-usage setup_theme
 EOF2
 
 section "Theme (current: $(cat "$HOME/.local/state/theme" 2>/dev/null || echo none))"
@@ -116,7 +120,8 @@ for f in "$CFG/hypr/colors.conf" "$CFG/fuzzel/fuzzel.ini" "$CFG/mako/config" "$C
 done
 
 section "Configs parse"
-check setup_hyprland "Hyprland accepts hyprland.conf (incl. colors.conf)" hyprland_config_ok
+check setup_hyprland "a Hyprland monitor profile is selected (hypr-profile lists them)" test -e "$CFG/hypr/profile.conf"
+check setup_hyprland "Hyprland accepts hyprland.conf (incl. profile, common/ and colors.conf)" hyprland_config_ok
 check setup_firefox "Firefox policies deployed and identical to the repo" \
 	bash -c "python3 -m json.tool /etc/firefox/policies/policies.json && cmp -s /etc/firefox/policies/policies.json '$SCRIPT_DIR/firefox/policies.json'"
 check install_cursor_extensions "Cursor has every extension in cursor/extensions.txt" missing_extensions
@@ -132,8 +137,11 @@ check setup_updates "weekly update timer is enabled" systemctl is-enabled --quie
 check install_ntfy "ntfy server answers on 127.0.0.1:2586" curl -fsS http://127.0.0.1:2586/v1/health
 check setup_ntfy_client "ntfy client service is running" systemctl --user is-active --quiet ntfy-client.service
 check install_hyprland "no Hyprland program loads Ubuntu's old hypr libraries" bash -c "source '$SCRIPT_DIR/extras.sh'; hypr_check_abi"
-check install_herdr_skill "herdr Claude Code skill installed" test -s "$HOME/.claude/skills/herdr/SKILL.md"
-check install_hyprland_skill "hyprland-control Claude Code skill installed" test -s "$HOME/.claude/skills/hyprland-control/SKILL.md"
+for skill in herdr:install_herdr_skill hyprland-control:install_hyprland_skill playwright-cli:install_playwright_skill; do
+	check "${skill#*:}" "${skill%%:*} skill in ~/.agents/skills (Cursor)" test -s "$HOME/.agents/skills/${skill%%:*}/SKILL.md"
+	check "${skill#*:}" "${skill%%:*} skill linked into ~/.claude/skills (Claude Code)" test -L "$HOME/.claude/skills/${skill%%:*}" -a -s "$HOME/.claude/skills/${skill%%:*}/SKILL.md"
+done
+check setup_hyprland "hyprlock has a config (else Super+L does nothing)" test -e "$HOME/.config/hypr/hyprlock.conf"
 check install_hyprland "hyprlock has its PAM service (else it cannot unlock)" test -f /etc/pam.d/hyprlock
 check install_hyprland "hyprlock and hyprpaper installed" bash -c "command -v hyprlock && command -v hyprpaper"
 check setup_keyboard "GNOME has the Dvorak layout (needs a desktop session)" gnome_dvorak

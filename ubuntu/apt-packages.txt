@@ -43,3 +43,8 @@ fonts-font-awesome
 fonts-jetbrains-mono
 libreoffice
 onedrive
+
+# Libraries the Playwright browser needs (see install_playwright_cli)
+libevent-2.1-7t64
+libavif16
+libmanette-0.2-0
