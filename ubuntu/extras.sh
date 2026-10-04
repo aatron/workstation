@@ -609,25 +609,42 @@ set_default_session() {
 	sudo busctl call org.freedesktop.Accounts "$path" org.freedesktop.Accounts.User SetXSession s hyprland
 }
 
-# Desktop background from ubuntu/wallpapers/$WALLPAPER, for GNOME (light and dark)
-# and Hyprland (hyprpaper). Skipped until the image is added.
-WALLPAPER=desktop.jpg
+# Desktop backgrounds from ubuntu/wallpapers/: one image per monitor under
+# Hyprland (hyprpaper), the left image on GNOME (light and dark). The monitor
+# names are this machine's (left HDMI-A-1, right DP-1); any other monitor gets the
+# left image. Skipped until the images are added.
+WALLPAPER_LEFT=TronForestLeft.png
+WALLPAPER_RIGHT=TronForestRight.png
+WALLPAPER_MONITOR_LEFT=HDMI-A-1
+WALLPAPER_MONITOR_RIGHT=DP-1
 setup_wallpaper() {
-	local img="$SCRIPT_DIR/wallpapers/$WALLPAPER"
-	if [[ ! -f "$img" ]]; then
-		echo "note: $img not found; skipping wallpaper" >&2
+	local left="$SCRIPT_DIR/wallpapers/$WALLPAPER_LEFT"
+	local right="$SCRIPT_DIR/wallpapers/$WALLPAPER_RIGHT"
+	if [[ ! -f "$left" || ! -f "$right" ]]; then
+		echo "note: $left or $right not found; skipping wallpaper" >&2
 		return 0
 	fi
 
-	gsettings set org.gnome.desktop.background picture-uri "file://$img"
-	gsettings set org.gnome.desktop.background picture-uri-dark "file://$img"
+	gsettings set org.gnome.desktop.background picture-uri "file://$left"
+	gsettings set org.gnome.desktop.background picture-uri-dark "file://$left"
 	gsettings set org.gnome.desktop.background picture-options zoom
 
 	mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
 	cat > "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprpaper.conf" <<-CONF
+		splash = false
 		wallpaper {
 		    monitor =
-		    path = $img
+		    path = $left
+		    fit_mode = cover
+		}
+		wallpaper {
+		    monitor = $WALLPAPER_MONITOR_LEFT
+		    path = $left
+		    fit_mode = cover
+		}
+		wallpaper {
+		    monitor = $WALLPAPER_MONITOR_RIGHT
+		    path = $right
 		    fit_mode = cover
 		}
 	CONF
