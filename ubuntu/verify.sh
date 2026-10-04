@@ -134,6 +134,7 @@ check setup_ntfy_client "ntfy client service is running" systemctl --user is-act
 check install_hyprland "no Hyprland program loads Ubuntu's old hypr libraries" bash -c "source '$SCRIPT_DIR/extras.sh'; hypr_check_abi"
 check install_herdr_skill "herdr Claude Code skill installed" test -s "$HOME/.claude/skills/herdr/SKILL.md"
 check install_hyprland_skill "hyprland-control Claude Code skill installed" test -s "$HOME/.claude/skills/hyprland-control/SKILL.md"
+check install_hyprland "hyprlock has its PAM service (else it cannot unlock)" test -f /etc/pam.d/hyprlock
 check install_hyprland "hyprlock and hyprpaper installed" bash -c "command -v hyprlock && command -v hyprpaper"
 check setup_keyboard "GNOME has the Dvorak layout (needs a desktop session)" gnome_dvorak
 

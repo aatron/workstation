@@ -426,6 +426,12 @@ install_hyprland() {
 		build_hypr_project $entry
 	done
 	hypr_prune_stale_libs
+	# hyprlock authenticates through PAM service "hyprlock", and PAM reads only
+	# /etc/pam.d. The build installs the file under /usr/local/etc, so without this
+	# copy Super+L locks the screen and nothing can unlock it.
+	if [[ -f "$HYPR_PREFIX/etc/pam.d/hyprlock" ]]; then
+		as_root install -D -m 644 "$HYPR_PREFIX/etc/pam.d/hyprlock" /etc/pam.d/hyprlock
+	fi
 	hypr_check_abi || { echo "!! the stack links Ubuntu's hypr libraries (see above)" >&2; return 1; }
 	for pkg in "${HYPR_APT_REMOVE[@]}"; do
 		dpkg -s "$pkg" >/dev/null 2>&1 && as_root apt-get remove -y "$pkg"
