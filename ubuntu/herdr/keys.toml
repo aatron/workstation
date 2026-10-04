@@ -1,0 +1,27 @@
+[keys]
+# Move between tabs
+previous_tab = "ctrl+alt+left"
+next_tab     = "ctrl+alt+right"
+# Move between workspaces
+previous_workspace = "ctrl+alt+up"
+next_workspace     = "ctrl+alt+down"
+
+# herdr-plus (installed by install_herdr_plus)
+[[keys.command]]
+key = "prefix+up"
+type = "plugin_action"
+command = "cloudmanic.herdr-plus.projects"
+description = "herdr-plus: projects"
+
+[[keys.command]]
+key = "prefix+down"
+type = "plugin_action"
+command = "cloudmanic.herdr-plus.quick-actions"
+description = "herdr-plus: quick actions"
+
+# herdr-navigator (installed by install_herdr_navigator)
+[[keys.command]]
+key = "prefix+t"
+type = "plugin_action"
+command = "herdr-navigator.open"
+description = "herdr-navigator: jump to anything"

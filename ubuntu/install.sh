@@ -25,12 +25,16 @@ STEPS=(
 	install_node
 	install_python
 	install_dotnet
+	install_go
 	install_aspire
 	install_wallust
 	# Agents and CLIs
 	install_claude_code
 	install_cursor_agent
 	install_herdr
+	install_herdr_plus
+	install_herdr_navigator
+	setup_herdr_config
 	install_herdr_skill
 	install_hyprland_skill
 	install_playwright_cli
