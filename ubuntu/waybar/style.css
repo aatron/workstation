@@ -38,7 +38,7 @@ window#waybar {
     background: @color6;
 }
 
-#clock, #cpu, #memory, #pulseaudio, #network, #tray, #custom-claude, #custom-cursor {
+#clock, #cpu, #memory, #pulseaudio, #network, #tray, #custom-claude, #custom-cursor, #custom-power {
     padding: 0 10px;
 }
 
@@ -56,4 +56,14 @@ window#waybar {
 
 #pulseaudio.muted {
     color: @color8;
+}
+
+#custom-power {
+    padding: 0 12px;
+    color: @color8;
+    background: transparent;
+}
+
+#custom-power:hover {
+    color: @foreground;
 }
