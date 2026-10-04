@@ -38,8 +38,20 @@ window#waybar {
     background: @color6;
 }
 
-#clock, #cpu, #memory, #pulseaudio, #network, #tray {
+#clock, #cpu, #memory, #pulseaudio, #network, #tray, #custom-claude, #custom-cursor {
     padding: 0 10px;
+}
+
+#custom-claude.warning, #custom-cursor.warning {
+    color: @color3;
+}
+
+#custom-claude.critical, #custom-cursor.critical {
+    color: @color1;
+}
+
+#custom-claude.unavailable, #custom-cursor.unavailable {
+    color: @color8;
 }
 
 #pulseaudio.muted {

@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# hypr-profile [name | --auto | --apply]
+#   (no args)  list profiles and mark the current one
+#   name       switch to that profile (and stop auto-detection), re-render the
+#              wallpaper config, reload Hyprland
+#   --auto     pick the profile whose monitors are all connected; run at Hyprland
+#              startup. Does nothing once a profile was chosen by name.
+#   --apply    re-render the wallpaper config for the current profile only
+# Profiles come from the repo (hypr/profiles/) and from this machine's own
+# ~/.config/hypr/local-profiles/ (monitor serials live there, never in the repo;
+# a local profile of the same name wins). Linked to ~/.local/bin/hypr-profile by
+# setup_hyprland.
+set -euo pipefail
+
+src="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
+profiles="$(readlink -f "$src/profiles")"
+cfg="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+localp="$cfg/local-profiles"
+link="$cfg/profile.conf"
+chosen="$cfg/profile.chosen"
+
+current() { [[ -L $link ]] && basename "$(readlink "$link")" .conf || true; }
+
+# Path of profile $1, local first; fails if there is none.
+find_profile() {
+	local d
+	for d in "$localp" "$profiles"; do
+		[[ -f $d/$1.conf ]] && { echo "$d/$1.conf"; return 0; }
+	done
+	return 1
+}
+
+# Names of all selectable profiles (those not starting with "_").
+profile_names() {
+	local f
+	for f in "$localp"/*.conf "$profiles"/*.conf; do
+		[[ -f $f ]] || continue
+		f="$(basename "$f" .conf)"
+		[[ $f == _* ]] || echo "$f"
+	done | sort -u
+}
+
+# Fill the wallpaper template for profile $1 into hyprpaper.conf, unless the
+# images are missing (setup_wallpaper skips the same way).
+render_wallpaper() {
+	local tpl d
+	for d in "$localp/wallpaper" "$profiles/wallpaper"; do
+		tpl="$d/$1.conf"
+		[[ -f $tpl ]] && break
+	done
+	[[ -f $tpl ]] || tpl="$profiles/wallpaper/default.conf"
+	[[ -f "$src/wallpapers/TronForestLeft.png" ]] || return 0
+	sed "s#@WALLPAPERS@#$(readlink -f "$src/wallpapers")#" "$tpl" >"$cfg/hyprpaper.conf"
+}
+
+# Monitor descriptions a profile needs: its `$role = desc:...` lines.
+profile_descs() { sed -n 's/^\$[A-Za-z_]*[[:space:]]*=[[:space:]]*desc:\(.*[^[:space:]]\)[[:space:]]*$/\1/p' "$1"; }
+
+# The profile with the most monitors that are all connected, else default.
+detect() {
+	local connected n d best=default best_n=0 count ok
+	connected="$(hyprctl monitors all -j | jq -r '.[].description')" || return 1
+	while IFS= read -r n; do
+		count=0 ok=1
+		while IFS= read -r d; do
+			grep -qxF -- "$d" <<<"$connected" || { ok=0; break; }
+			count=$((count + 1))
+		done < <(profile_descs "$(find_profile "$n")")
+		if ((ok && count > best_n)); then best=$n best_n=$count; fi
+	done < <(profile_names)
+	echo "$best"
+}
+
+# Link profile $1, re-render the wallpaper config, restart hyprpaper, reload.
+switch_to() {
+	mkdir -p "$cfg"
+	ln -sfn "$(find_profile "$1")" "$link"
+	render_wallpaper "$1"
+	# hyprpaper only reads its config at start.
+	if pgrep -x hyprpaper >/dev/null; then
+		pkill -x hyprpaper || true
+		setsid hyprpaper >/dev/null 2>&1 &
+	fi
+	hyprctl reload >/dev/null 2>&1 || echo "hypr-profile: not in a Hyprland session; reload skipped" >&2
+	echo "profile: $1"
+}
+
+case "${1:-}" in
+"")
+	cur="$(current)"
+	while IFS= read -r n; do
+		if [[ $n == "$cur" ]]; then echo "* $n"; else echo "  $n"; fi
+	done < <(profile_names)
+	;;
+--auto)
+	[[ -e $chosen ]] && exit 0
+	name="$(detect)" || { echo "hypr-profile: cannot query monitors; keeping $(current)" >&2; exit 0; }
+	[[ $name == "$(current)" ]] || switch_to "$name"
+	;;
+--apply)
+	render_wallpaper "$(current)"
+	;;
+*)
+	name="$1"
+	[[ $name != _* ]] && find_profile "$name" >/dev/null ||
+		{ echo "hypr-profile: no profile '$name' (run hypr-profile to list)" >&2; exit 1; }
+	mkdir -p "$cfg"
+	touch "$chosen"
+	switch_to "$name"
+	;;
+esac

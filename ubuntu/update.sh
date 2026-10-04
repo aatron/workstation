@@ -53,7 +53,7 @@ main() {
 	record run user update_repo
 	record run root update_apt
 	record run root update_snap
-	for step in install_rust install_node install_python install_dotnet install_herdr_skill; do
+	for step in install_rust install_node install_python install_dotnet install_aspire install_herdr_skill install_playwright_cli install_playwright_skill; do
 		record run user "$step"
 	done
 

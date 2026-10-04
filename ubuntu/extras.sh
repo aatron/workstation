@@ -489,16 +489,29 @@ ntfy_test() {
 	echo "sent a test message to $NTFY_URL/$NTFY_TOPIC; look for the toast (makoctl history shows it if it already faded)"
 }
 
-# Claude Code skills, in ~/.claude/skills (per user, all projects).
+# Agent skills (per user, all projects). Each skill is installed once, in
+# ~/.agents/skills, which Cursor reads, and linked into ~/.claude/skills, the only
+# place Claude Code reads. Both tools therefore offer the same skills.
+AGENT_SKILLS_DIR="$HOME/.agents/skills"
+CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
+link_skill() {
+	local name="$1" link="$CLAUDE_SKILLS_DIR/$1"
+	mkdir -p "$CLAUDE_SKILLS_DIR"
+	# Earlier installs wrote real directories here; the link replaces them.
+	[[ -d "$link" && ! -L "$link" ]] && rm -rf "$link"
+	ln -sfn "$AGENT_SKILLS_DIR/$name" "$link"
+}
+
 # herdr: the official skill, printed by the installed binary so it always matches
 # that version (re-run by the weekly update). It only activates inside a herdr pane.
 install_herdr_skill() {
-	local herdr dir="$HOME/.claude/skills/herdr"
+	local herdr dir="$AGENT_SKILLS_DIR/herdr"
 	herdr="$(command -v herdr || echo "$HOME/.local/bin/herdr")"
 	mkdir -p "$dir"
 	"$herdr" --skill > "$dir/SKILL.md.new"
 	[[ -s "$dir/SKILL.md.new" ]] || { rm -f "$dir/SKILL.md.new"; echo "herdr --skill printed nothing" >&2; return 1; }
 	mv "$dir/SKILL.md.new" "$dir/SKILL.md"
+	link_skill herdr
 }
 
 # hyprland-control (third party, unlicensed, so pinned to a reviewed commit rather
@@ -507,9 +520,31 @@ install_herdr_skill() {
 # given workspace). Bump the rev only after reading the new SKILL.md.
 HYPRLAND_SKILL_REV=8b4875e328e0fbd73ed01ec82b0c5fe56114d7e2
 install_hyprland_skill() {
-	local dir="$HOME/.claude/skills/hyprland-control"
+	local dir="$AGENT_SKILLS_DIR/hyprland-control"
 	mkdir -p "$dir"
 	curl -fsSL "https://raw.githubusercontent.com/xingguangcuican6666/hyprland-control/$HYPRLAND_SKILL_REV/skills/hyprland-control/SKILL.md" -o "$dir/SKILL.md"
+	link_skill hyprland-control
+}
+
+# Playwright CLI (Microsoft, Apache-2.0): browser automation from the shell. The
+# package is global under the fnm node, so it is linked into ~/.local/bin like node.
+# install-browser downloads the browser it drives. Re-run by the weekly update.
+install_playwright_cli() {
+	mkdir -p "$HOME/.local/bin"
+	npm install -g @playwright/cli@latest
+	ln -sfn "$HOME/.local/share/fnm/aliases/default/bin/playwright-cli" "$HOME/.local/bin/playwright-cli"
+	"$HOME/.local/bin/playwright-cli" install-browser
+}
+
+# The skill that ships inside the installed package, so it always matches the CLI.
+install_playwright_skill() {
+	local src dir="$AGENT_SKILLS_DIR/playwright-cli"
+	src="$(npm root -g)/@playwright/cli/skills/playwright-cli"
+	[[ -s "$src/SKILL.md" ]] || { echo "no skill in $src (run install_playwright_cli first)" >&2; return 1; }
+	rm -rf "$dir"
+	mkdir -p "$AGENT_SKILLS_DIR"
+	cp -r "$src" "$dir"
+	link_skill playwright-cli
 }
 
 # Language toolchains, kept at the latest stable release. Each install_* is also its
@@ -559,6 +594,20 @@ install_dotnet() {
 	ln -sfn "$HOME/.dotnet/dotnet" "$HOME/.local/bin/dotnet"
 }
 
+# Aspire CLI (Microsoft): standalone binary from the official script, in
+# ~/.aspire/bin. --skip-path keeps it from editing shell rc files; the binary is
+# linked into ~/.local/bin like the other tools. Re-running updates it (the weekly
+# update does). Aspire's container-based features also need Docker or Podman.
+install_aspire() {
+	local tmp
+	tmp="$(mktemp -d)"
+	curl -fsSL https://aspire.dev/install.sh -o "$tmp/aspire-install.sh"
+	bash "$tmp/aspire-install.sh" --install-path "$HOME/.aspire/bin" --skip-path
+	rm -rf "$tmp"
+	mkdir -p "$HOME/.local/bin"
+	ln -sfn "$HOME/.aspire/bin/aspire" "$HOME/.local/bin/aspire"
+}
+
 # Weekly update steps (run by update.sh, as root unless noted).
 update_apt() {
 	as_root apt-get update
@@ -588,11 +637,46 @@ setup_updates() {
 # Hyprland: repo config. Waybar uses its packaged default (/etc/xdg/waybar)
 # until ~/.config/waybar exists. Hyprland shows up as a login-screen session
 # alongside GNOME.
+#
+# The monitor setup is a profile (hypr/profiles/<name>.conf) linked as
+# ~/.config/hypr/profile.conf; the rest is shared in hypr/common/. Profiles with
+# real monitor descriptions live per machine in ~/.config/hypr/local-profiles/
+# (not in the repo). Which profile:
+# $HYPR_PROFILE (also pins it), else the one already on this machine, else
+# "default". Nothing identifies a machine by name: at each Hyprland start
+# `hypr-profile --auto` picks the profile whose monitors are connected, until a
+# profile is chosen with `hypr-profile <name>`.
+select_hypr_profile() {
+	local dir="$1" name=""
+	if [[ -n "${HYPR_PROFILE:-}" ]]; then
+		name="$HYPR_PROFILE"
+		touch "$dir/profile.chosen"
+	elif [[ -e "$dir/profile.conf" ]]; then
+		name="$(basename "$(readlink "$dir/profile.conf")" .conf)"
+	fi
+	[[ -f "$dir/local-profiles/$name.conf" || -f "$SCRIPT_DIR/hypr/profiles/$name.conf" ]] || name=default
+	echo "$name"
+}
+
 setup_hyprland() {
-	local dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
-	mkdir -p "$dir"
+	local dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr" profile
+	mkdir -p "$dir" "$HOME/.local/bin"
 	[[ -f "$dir/hyprland.conf" && ! -L "$dir/hyprland.conf" ]] && mv "$dir/hyprland.conf" "$dir/hyprland.conf.bak"
 	ln -sfn "$SCRIPT_DIR/hypr/hyprland.conf" "$dir/hyprland.conf"
+	ln -sfn "$SCRIPT_DIR/hypr/common" "$dir/common"
+	ln -sfn "$SCRIPT_DIR/hypr/profiles" "$dir/profiles"
+	ln -sfn "$SCRIPT_DIR/hypr/scripts/hypr-profile" "$HOME/.local/bin/hypr-profile"
+	profile="$(select_hypr_profile "$dir")"
+	if [[ -f "$dir/local-profiles/$profile.conf" ]]; then
+		ln -sfn "$dir/local-profiles/$profile.conf" "$dir/profile.conf"
+	else
+		ln -sfn "$SCRIPT_DIR/hypr/profiles/$profile.conf" "$dir/profile.conf"
+	fi
+	# hyprlock exits at once without a config (Super+L then does nothing). Start from
+	# the sample the pinned hyprlock build installs; an existing file is kept.
+	if [[ ! -e "$dir/hyprlock.conf" ]]; then
+		install -m 644 "$HYPR_PREFIX/share/hypr/hyprlock.conf" "$dir/hyprlock.conf"
+	fi
 	# hyprland.conf starts these itself; the packaged user units would also start
 	# them in the GNOME session, where waybar fails (no layer-shell) and retries.
 	systemctl --user disable waybar.service hyprpaper.service 2>/dev/null || true
@@ -610,13 +694,12 @@ set_default_session() {
 }
 
 # Desktop backgrounds from ubuntu/wallpapers/: one image per monitor under
-# Hyprland (hyprpaper), the left image on GNOME (light and dark). The monitor
-# names are this machine's (left HDMI-A-1, right DP-1); any other monitor gets the
-# left image. Skipped until the images are added.
+# Hyprland (hyprpaper), the left image on GNOME (light and dark). The hyprpaper
+# config comes from the current Hyprland profile's template
+# (hypr/profiles/wallpaper/<profile>.conf, else default.conf), rendered by
+# `hypr-profile --apply`. Run after setup_hyprland. Skipped until the images are added.
 WALLPAPER_LEFT=TronForestLeft.png
 WALLPAPER_RIGHT=TronForestRight.png
-WALLPAPER_MONITOR_LEFT=HDMI-A-1
-WALLPAPER_MONITOR_RIGHT=DP-1
 setup_wallpaper() {
 	local left="$SCRIPT_DIR/wallpapers/$WALLPAPER_LEFT"
 	local right="$SCRIPT_DIR/wallpapers/$WALLPAPER_RIGHT"
@@ -630,24 +713,7 @@ setup_wallpaper() {
 	gsettings set org.gnome.desktop.background picture-options zoom
 
 	mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
-	cat > "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprpaper.conf" <<-CONF
-		splash = false
-		wallpaper {
-		    monitor =
-		    path = $left
-		    fit_mode = cover
-		}
-		wallpaper {
-		    monitor = $WALLPAPER_MONITOR_LEFT
-		    path = $left
-		    fit_mode = cover
-		}
-		wallpaper {
-		    monitor = $WALLPAPER_MONITOR_RIGHT
-		    path = $right
-		    fit_mode = cover
-		}
-	CONF
+	"$SCRIPT_DIR/hypr/scripts/hypr-profile" --apply
 }
 
 # Desktop theme: wallust config, templates and color schemes from theme/, the
@@ -663,6 +729,7 @@ setup_theme() {
 	ln -sfn "$SCRIPT_DIR/theme/theme" "$HOME/.local/bin/theme"
 	ln -sfn "$SCRIPT_DIR/waybar/config.jsonc" "$cfg/waybar/config.jsonc"
 	ln -sfn "$SCRIPT_DIR/waybar/style.css" "$cfg/waybar/style.css"
+	ln -sfn "$SCRIPT_DIR/waybar/ai-usage" "$HOME/.local/bin/ai-usage"
 
 	gsettings set org.gnome.desktop.interface color-scheme prefer-dark ||
 		echo "warning: could not set GNOME dark mode (no desktop session?)" >&2

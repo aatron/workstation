@@ -25,6 +25,7 @@ STEPS=(
 	install_node
 	install_python
 	install_dotnet
+	install_aspire
 	install_wallust
 	# Agents and CLIs
 	install_claude_code
@@ -32,6 +33,8 @@ STEPS=(
 	install_herdr
 	install_herdr_skill
 	install_hyprland_skill
+	install_playwright_cli
+	install_playwright_skill
 	install_azure_cli
 	# IDEs
 	install_cursor
