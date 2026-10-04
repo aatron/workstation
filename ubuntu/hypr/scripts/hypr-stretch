@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# hypr-stretch width | height | restore
+#   width     make the active window span the monitor's full width, staying tiled
+#   height    make the active window span the monitor's full height, staying tiled
+#   restore   put the window back next to the window it was split with
+#
+# A tiled window can only touch both edges of a monitor along one axis if it sits
+# at the root of the dwindle tree, so this moves it there (layoutmsg movetoroot)
+# and flips the root split if it ended up the wrong way round. Before the first
+# stretch it remembers the neighbor it was split with and on which side
+# ($XDG_RUNTIME_DIR/hypr-stretch/<window>.json); restore re-inserts the window
+# beside that neighbor. With nothing remembered, restore evens the window's split
+# instead. Linked to ~/.local/bin/hypr-stretch by setup_hyprland.
+set -euo pipefail
+
+mode="${1:-}"
+state_dir="${XDG_RUNTIME_DIR:-/tmp}/hypr-stretch"
+win="$(hyprctl activewindow -j)"
+addr="$(jq -r '.address // empty' <<<"$win")"
+[[ -n $addr ]] || exit 0
+state="$state_dir/$addr.json"
+
+# A window that was floated (by hand, or by an earlier version of this script) is tiled first.
+if [[ "$(jq -r '.floating' <<<"$win")" == true ]]; then
+	hyprctl dispatch settiled "address:$addr" >/dev/null
+	[[ $mode == restore ]] && rm -f "$state" && exit 0
+fi
+
+# The tiled window on this workspace that shares a split edge with the active one
+# (most overlap wins), as "<address> <side>": the side of that window the active one is on.
+neighbor() {
+	hyprctl clients -j | jq -r --argjson me "$win" '
+		def ov($a; $al; $b; $bl): ([$a + $al, $b + $bl] | min) - ([$a, $b] | max);
+		[ .[] | select(.workspace.id == $me.workspace.id and .floating == false and .mapped and .address != $me.address)
+		  | . as $o
+		  | ($me.at[0]) as $mx | ($me.at[1]) as $my | ($me.size[0]) as $mw | ($me.size[1]) as $mh
+		  | (if   (($mx - ($o.at[0] + $o.size[0])) | fabs) < 40 then "r"
+		     elif ((($o.at[0]) - ($mx + $mw)) | fabs) < 40 then "l"
+		     elif (($my - ($o.at[1] + $o.size[1])) | fabs) < 40 then "d"
+		     elif ((($o.at[1]) - ($my + $mh)) | fabs) < 40 then "u" else null end) as $side
+		  | select($side != null)
+		  | (if $side == "r" or $side == "l" then ov($my; $mh; $o.at[1]; $o.size[1]) else ov($mx; $mw; $o.at[0]; $o.size[0]) end) as $overlap
+		  | select($overlap > 0)
+		  | {address: $o.address, side: $side, overlap: $overlap} ]
+		| sort_by(-.overlap) | first // empty | "\(.address) \(.side)"'
+}
+
+case "$mode" in
+width | height)
+	mon="$(jq -r '.monitor' <<<"$win")"
+	gap="$(hyprctl getoption general:gaps_out -j | jq -r '.custom | split(" ")[0]')"
+	# Usable size of this monitor in layout pixels: inside the bar and outer gaps.
+	read -r aw ah < <(hyprctl monitors -j | jq -r --argjson m "$mon" --argjson g "$gap" '
+		.[] | select(.id == $m) | (.scale) as $s | .reserved as $r
+		| [(.width / $s - $r[0] - $r[2] - 2 * $g), (.height / $s - $r[1] - $r[3] - 2 * $g)] | map(floor) | @tsv')
+
+	if [[ ! -e $state ]] && read -r nb side < <(neighbor); then
+		mkdir -p "$state_dir"
+		jq -n --arg n "$nb" --arg s "$side" '{neighbor: $n, side: $s}' >"$state"
+	fi
+
+	# Fails when the window is alone in its workspace, where it already fills it.
+	hyprctl dispatch layoutmsg movetoroot >/dev/null 2>&1 || exit 0
+	sleep 0.05
+
+	read -r w h < <(hyprctl activewindow -j | jq -r '[.size[0], .size[1]] | @tsv')
+	# "Full" is within 10% of the usable size; a split half is nowhere near it.
+	if [[ $mode == width ]]; then
+		((w * 10 >= aw * 9)) || hyprctl dispatch layoutmsg togglesplit >/dev/null
+	else
+		((h * 10 >= ah * 9)) || hyprctl dispatch layoutmsg togglesplit >/dev/null
+	fi
+	;;
+restore)
+	if [[ -e $state ]]; then
+		read -r nb side < <(jq -r '"\(.neighbor) \(.side)"' "$state")
+		rm -f "$state"
+		if hyprctl clients -j | jq -e --arg a "$nb" 'any(.[]; .address == $a)' >/dev/null; then
+			# Take the window out, then re-tile it on the remembered side of its old neighbor.
+			hyprctl dispatch setfloating "address:$addr" >/dev/null
+			hyprctl dispatch focuswindow "address:$nb" >/dev/null
+			hyprctl dispatch layoutmsg "preselect $side" >/dev/null
+			hyprctl dispatch settiled "address:$addr" >/dev/null
+			hyprctl dispatch focuswindow "address:$addr" >/dev/null
+			exit 0
+		fi
+	fi
+	hyprctl dispatch layoutmsg splitratio exact 1 >/dev/null
+	;;
+*)
+	echo "usage: hypr-stretch width|height|restore" >&2
+	exit 2
+	;;
+esac

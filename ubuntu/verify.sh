@@ -100,6 +100,7 @@ $CFG/hypr/hyprland.conf hypr/hyprland.conf setup_hyprland
 $CFG/hypr/common hypr/common setup_hyprland
 $CFG/hypr/profiles hypr/profiles setup_hyprland
 $HOME/.local/bin/hypr-profile hypr/scripts/hypr-profile setup_hyprland
+$HOME/.local/bin/hypr-stretch hypr/scripts/hypr-stretch setup_hyprland
 $CFG/Cursor/User/settings.json cursor/settings.json setup_cursor_settings
 $CFG/Cursor/User/keybindings.json cursor/keybindings.json setup_cursor_settings
 $CFG/zed/settings.json zed/settings.json setup_zed_settings
@@ -124,6 +125,7 @@ check install_herdr_plus "the herdr-plus plugin is installed" bash -c "herdr plu
 check install_herdr_navigator "the herdr-navigator plugin is installed" bash -c "herdr plugin list | grep -q herdr-navigator"
 check setup_herdr_config "herdr keybindings are in config.toml" has_text "$CFG/herdr/config.toml" "BEGIN workstation herdr keys"
 check setup_herdr_config "herdr theme is in config.toml" has_text "$CFG/herdr/config.toml" "BEGIN workstation herdr theme"
+check setup_hyprland "Hyprland PATH includes ~/.local/bin (kitty lives there)" has_text "$CFG/hypr/env.conf" "$HOME/.local/bin"
 check setup_hyprland "a Hyprland monitor profile is selected (hypr-profile lists them)" test -e "$CFG/hypr/profile.conf"
 check setup_hyprland "Hyprland accepts hyprland.conf (incl. profile, common/ and colors.conf)" hyprland_config_ok
 check setup_firefox "Firefox policies deployed and identical to the repo" \
