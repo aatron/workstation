@@ -111,6 +111,7 @@ $CFG/waybar/config.jsonc waybar/config.jsonc setup_theme
 $CFG/waybar/style.css waybar/style.css setup_theme
 $HOME/.local/bin/theme theme/theme setup_theme
 $HOME/.local/bin/ai-usage waybar/ai-usage setup_theme
+$HOME/.local/bin/power-menu waybar/power-menu setup_theme
 EOF2
 
 section "Theme (current: $(cat "$HOME/.local/state/theme" 2>/dev/null || echo none))"

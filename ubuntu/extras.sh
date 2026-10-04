@@ -817,6 +817,7 @@ setup_theme() {
 	ln -sfn "$SCRIPT_DIR/waybar/config.jsonc" "$cfg/waybar/config.jsonc"
 	ln -sfn "$SCRIPT_DIR/waybar/style.css" "$cfg/waybar/style.css"
 	ln -sfn "$SCRIPT_DIR/waybar/ai-usage" "$HOME/.local/bin/ai-usage"
+	ln -sfn "$SCRIPT_DIR/waybar/power-menu" "$HOME/.local/bin/power-menu"
 
 	gsettings set org.gnome.desktop.interface color-scheme prefer-dark ||
 		echo "warning: could not set GNOME dark mode (no desktop session?)" >&2

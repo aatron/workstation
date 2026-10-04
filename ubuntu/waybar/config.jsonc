@@ -7,7 +7,7 @@
   "spacing": 4,
   "modules-left": ["custom/launcher", "hyprland/workspaces", "hyprland/window"],
   "modules-center": ["clock"],
-  "modules-right": ["custom/claude", "custom/cursor", "pulseaudio", "network", "cpu", "memory", "tray"],
+  "modules-right": ["custom/claude", "custom/cursor", "pulseaudio", "network", "cpu", "memory", "tray", "custom/power"],
   "custom/claude": {
     "exec": "$HOME/.local/bin/ai-usage claude",
     "return-type": "json",
@@ -19,6 +19,11 @@
     "return-type": "json",
     "interval": 120,
     "on-click": "xdg-open https://cursor.com/dashboard"
+  },
+  "custom/power": {
+    "format": "⏻",
+    "tooltip": false,
+    "on-click": "$HOME/.local/bin/power-menu"
   },
   "custom/launcher": { "format": "Apps", "tooltip": false, "on-click": "fuzzel" },
   "hyprland/window": { "max-length": 60 },

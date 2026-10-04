@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# power-menu — pick Lock / Log out / Suspend / Reboot / Power off in fuzzel.
+# Run by Waybar's "Power" button. Linked to ~/.local/bin/power-menu by setup_theme.
+set -euo pipefail
+
+choice="$(printf '%s\n' Lock "Log out" Suspend Reboot "Power off" | fuzzel --dmenu --prompt 'power> ' --lines 5)" || exit 0
+
+case "$choice" in
+Lock) hyprlock ;;
+"Log out") command -v hyprshutdown >/dev/null 2>&1 && hyprshutdown || hyprctl dispatch exit ;;
+Suspend) systemctl suspend ;;
+Reboot) systemctl reboot ;;
+"Power off") systemctl poweroff ;;
+esac
