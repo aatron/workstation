@@ -79,7 +79,7 @@ check apt_packages "all packages in apt-packages.txt" missing_packages
 
 section "Commands"
 for pair in \
-	git:apt_packages vim:apt_packages micro:apt_packages curl:apt_packages jq:apt_packages \
+	git:apt_packages gh:apt_packages vim:apt_packages micro:apt_packages curl:apt_packages jq:apt_packages \
 	fzf:apt_packages zoxide:apt_packages gm:apt_packages python3:apt_packages pipx:apt_packages \
 	node:install_node npm:install_node uv:install_python dotnet:install_dotnet cargo:install_rust \
 	wallust:install_wallust claude:install_claude_code agent:install_cursor_agent \

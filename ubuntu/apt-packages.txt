@@ -1,6 +1,7 @@
 # Base
 vim
 git
+gh
 micro
 curl
 ca-certificates
