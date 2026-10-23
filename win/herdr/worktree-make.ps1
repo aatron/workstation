@@ -87,7 +87,8 @@ $ErrorActionPreference = 'Stop'
 # EDIT THESE FOR YOUR MACHINE
 # ===========================================================================
 $SRC_ROOT = Join-Path $env:USERPROFILE 'source\repos'
-$BRANCH_PREFIX = 'feature/YOU'  # edit this: feature/<you>/<id>-<slug>
+# Override with $env:WT_BRANCH_PREFIX. Default uses the Windows username.
+$BRANCH_PREFIX = if ($env:WT_BRANCH_PREFIX) { $env:WT_BRANCH_PREFIX } else { "feature/$env:USERNAME" }
 # Story worktree base comes from Herdr config [worktrees].directory
 $CLAUDE_CMD = 'claude --permission-mode auto'
 $CURSOR_CMD = 'agent --auto-review'

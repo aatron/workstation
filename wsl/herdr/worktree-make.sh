@@ -113,7 +113,8 @@ set -euo pipefail
 # EDIT THESE FOR YOUR MACHINE
 # ===========================================================================
 SRC_ROOT="$HOME/source/repos"       # where your primary repo clones live
-BRANCH_PREFIX="feature/YOU"         # edit this: feature/<you>/<id>-<slug>
+# Override with WT_BRANCH_PREFIX if needed. Default uses $USER.
+BRANCH_PREFIX="${WT_BRANCH_PREFIX:-feature/${USER:-YOU}}"
 # Story worktree base comes from Herdr config [worktrees].directory
 # (this workflow uses ~/source/worktrees). Set that in ~/.config/herdr/config.toml.
 #

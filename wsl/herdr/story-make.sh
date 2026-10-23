@@ -255,6 +255,6 @@ if [[ "${WT_SKIP_AGENT:-}" != "1" ]]; then
   seed_claude_handoff || true
 fi
 
-BRANCH="${WT_BRANCH:-feature/YOU/${ID}-${SLUG}}"
+BRANCH="${WT_BRANCH:-${WT_BRANCH_PREFIX:-feature/${USER:-YOU}}/${ID}-${SLUG}}"
 echo "STORY_MAKE rc=${WT_RC} story_dir=${STORY_DIR} branch=${BRANCH} created=${CREATED} prompt=${PROMPT_FILE}"
 exit "$WT_RC"
