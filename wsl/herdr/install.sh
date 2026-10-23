@@ -13,7 +13,8 @@
 #      worktree-remove.sh -> ~/bin/worktree-remove.sh,
 #      review-make.sh -> ~/bin/review-make.sh,
 #      review-remove.sh -> ~/bin/review-remove.sh,
-#      story-reap.sh -> ~/bin/story-reap.sh, and
+#      story-reap.sh -> ~/bin/story-reap.sh,
+#      story-make.sh -> ~/bin/story-make.sh, and
 #      az-watcher/az-watcher.sh -> ~/bin/az-watcher
 #   6. Installs quick-action TOMLs (dev + delete + new-review + remove-review +
 #      reap + az-sync) into herdr-plus, and deletes retired ones
@@ -35,6 +36,7 @@ TARGET_REMOVE="${BIN_DIR}/worktree-remove.sh"
 TARGET_REVIEW_MAKE="${BIN_DIR}/review-make.sh"
 TARGET_REVIEW_REMOVE="${BIN_DIR}/review-remove.sh"
 TARGET_STORY_REAP="${BIN_DIR}/story-reap.sh"
+TARGET_STORY_MAKE="${BIN_DIR}/story-make.sh"
 TARGET_AZ_WATCHER="${BIN_DIR}/az-watcher"
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -189,7 +191,11 @@ install_plugin() {
   # Non-interactive installs need --yes. It must come *after* the repo:
   # `herdr plugin install --yes owner/repo` and `-y owner/repo` both print
   # usage and do nothing (herdr 0.7.5). `owner/repo --yes` works.
-  herdr plugin install "$spec" --yes
+  # Do not abort the whole install when a plugin needs a newer herdr — scripts
+  # and ~/bin symlinks still matter more than an optional plugin.
+  if ! herdr plugin install "$spec" --yes; then
+    echo "WARNING: plugin ${spec} failed (herdr may be too old); continuing" >&2
+  fi
 }
 
 install_file() {
@@ -309,6 +315,7 @@ normalize_shell_script "${SCRIPT_DIR}/worktree-remove.sh"
 normalize_shell_script "${SCRIPT_DIR}/review-make.sh"
 normalize_shell_script "${SCRIPT_DIR}/review-remove.sh"
 normalize_shell_script "${SCRIPT_DIR}/story-reap.sh"
+normalize_shell_script "${SCRIPT_DIR}/story-make.sh"
 normalize_shell_script "${SCRIPT_DIR}/az-watcher/az-watcher.sh"
 ln -sfn "${SCRIPT_DIR}/worktree-make.sh" "$TARGET_SCRIPT"
 echo "-> script:  ${TARGET_SCRIPT} -> ${SCRIPT_DIR}/worktree-make.sh"
@@ -327,6 +334,9 @@ echo "-> cleanup: ${TARGET_REVIEW_REMOVE} -> ${SCRIPT_DIR}/review-remove.sh"
 
 ln -sfn "${SCRIPT_DIR}/story-reap.sh" "$TARGET_STORY_REAP"
 echo "-> reap:    ${TARGET_STORY_REAP} -> ${SCRIPT_DIR}/story-reap.sh"
+
+ln -sfn "${SCRIPT_DIR}/story-make.sh" "$TARGET_STORY_MAKE"
+echo "-> story:  ${TARGET_STORY_MAKE} -> ${SCRIPT_DIR}/story-make.sh"
 
 ln -sfn "${SCRIPT_DIR}/az-watcher/az-watcher.sh" "$TARGET_AZ_WATCHER"
 echo "-> az:      ${TARGET_AZ_WATCHER} -> ${SCRIPT_DIR}/az-watcher/az-watcher.sh"

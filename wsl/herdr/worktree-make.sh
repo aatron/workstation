@@ -92,6 +92,10 @@
 #     WT_ID             story id            (required to enable this mode)
 #     WT_SLUG           story slug          (required to enable this mode)
 #     WT_REPOS          csv of repos        (development)
+#     WT_BRANCH         full local branch name (development; default is
+#                       ${BRANCH_PREFIX}/${ID}-${SLUG})
+#     WT_CLAUDE_CMD     claude tab command (story + repo rows; story-make sets
+#                       manual mode + approve-first brief)
 #     WT_BRANCHES_FILE  file of "<repo>:<branch>" lines (review; replaces the
 #                       placeholder branch list)
 #   Creating a worktree that already exists is a no-op ("exists, skipping"), and
@@ -743,13 +747,14 @@ init_workspace() {
 #     to an existing story is created last and would otherwise sit at the bottom
 #     of the sidebar rather than under its story.
 init_story_workspace() {
-  local notes notes_name story_name ws dir repo_notes connector label rws
+  local notes notes_name story_name ws dir repo_notes connector label rws claude_cmd
   local -a repos=() ordered=()
   local -A story_cmds=() repo_cmds=()
   local i tree=0
 
+  claude_cmd="${WT_CLAUDE_CMD:-$CLAUDE_CMD}"
   notes="$(story_notes_path)"
-  story_cmds[claude]="$CLAUDE_CMD"
+  story_cmds[claude]="$claude_cmd"
   story_cmds[cursor]="$CURSOR_CMD"
   if [[ -n "$notes" ]]; then
     story_cmds[notes]="micro $(printf '%q' "$notes")"
@@ -777,7 +782,7 @@ init_story_workspace() {
     repo="${repos[$i]}"
     dir="${STORY_DIR}/${repo}"
     repo_notes="$(repo_notes_path "$repo")"
-    repo_cmds=([claude]="$CLAUDE_CMD")
+    repo_cmds=([claude]="$claude_cmd")
     if [[ -e "$repo_notes" ]]; then
       repo_cmds[notes]="micro $(printf '%q' "$repo_notes")"
     fi
@@ -1135,7 +1140,11 @@ else
 fi
 [[ -n "$ID" && -n "$SLUG" ]] || { echo "id and slug required" >&2; exit 1; }
 
-BRANCH="${BRANCH_PREFIX}/${ID}-${SLUG}"     # feature/<you>/<id>-<slug> (hyphen)
+if [[ -n "${WT_BRANCH:-}" ]]; then
+  BRANCH="$WT_BRANCH"
+else
+  BRANCH="${BRANCH_PREFIX}/${ID}-${SLUG}"   # feature/<you>/<id>-<slug> (hyphen)
+fi
 TYPE_DIR="${WORKTREE_ROOT}/${SUBFOLDER}"    # .../<subfolder>  (no feature/<you> prefix)
 STORY_DIR="${TYPE_DIR}/${ID}-${SLUG}"       # parent of the repo worktrees
 # Repos in the order they were requested. The first one owns the notes file the
