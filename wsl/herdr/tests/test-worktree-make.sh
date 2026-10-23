@@ -17,7 +17,7 @@ set -uo pipefail
 FIXTURE_MARKER="herdr-wt-tests"
 BASE="${TMPDIR:-/tmp}/${FIXTURE_MARKER}/$$/make"
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/worktree-make.sh"
-PREFIX=feature/YOU   # must match BRANCH_PREFIX in worktree-make.sh
+PREFIX="${WT_BRANCH_PREFIX:-feature/${USER:-YOU}}"   # must match BRANCH_PREFIX in worktree-make.sh
 PASS=0; FAIL=0; FAILED_NAMES=()
 RUN=0
 

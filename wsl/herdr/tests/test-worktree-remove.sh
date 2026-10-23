@@ -6,7 +6,7 @@ set -uo pipefail
 
 BASE="${TMPDIR:-/tmp}/herdr-wt-tests/$$/remove"
 REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/worktree-remove.sh"
-PREFIX=feature/YOU   # must match BRANCH_PREFIX in worktree-make.sh
+PREFIX="${WT_BRANCH_PREFIX:-feature/${USER:-YOU}}"   # must match BRANCH_PREFIX in worktree-make.sh
 PASS=0; FAIL=0; NAMES=()
 RUN=0
 
