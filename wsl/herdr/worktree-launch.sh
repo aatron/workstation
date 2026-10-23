@@ -54,10 +54,18 @@ esac
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1" >&2; exit 1; }; }
 need herdr
 need jq
-[[ -x "$SCRIPT" || -f "$SCRIPT" ]] || {
+[[ -f "$SCRIPT" ]] || {
   echo "missing $SCRIPT (run install.sh)" >&2
   exit 1
 }
+# Symlinks to a non-executable target fail with "Permission denied" and herdr-plus
+# swallows stderr — the form just closes. Prefer +x; fall back to bash.
+if [[ -x "$SCRIPT" ]]; then
+  PANE_CMD="${SCRIPT}${RUN_ARGS:+ ${RUN_ARGS}}"
+else
+  echo "WARNING: $SCRIPT is not executable; running via bash (chmod +x or re-run install.sh)" >&2
+  PANE_CMD="bash ${SCRIPT}${RUN_ARGS:+ ${RUN_ARGS}}"
+fi
 
 args=(tab create --label "$label" --focus)
 [[ -n "$WS" ]] && args+=(--workspace "$WS")
@@ -72,7 +80,7 @@ pane="$(jq -r '.result.root_pane.pane_id // empty' <<<"$out")"
 }
 
 # Submit into the new pane's shell (returns immediately; script runs interactively).
-herdr pane run "$pane" "${SCRIPT} ${RUN_ARGS}" || {
+herdr pane run "$pane" "$PANE_CMD" || {
   echo "herdr pane run failed for pane ${pane}" >&2
   exit 1
 }
