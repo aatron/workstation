@@ -46,6 +46,10 @@ STEPS=(
 	install_zed
 	setup_cursor_settings
 	setup_zed_settings
+	# Needs Claude Code, node and Cursor
+	install_ponytail
+	# Needs Claude Code and dotnet
+	install_csharp_lsp
 	# Desktop and terminal
 	setup_zoxide
 	setup_firefox

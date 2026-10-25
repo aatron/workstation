@@ -603,6 +603,47 @@ install_playwright_skill() {
 	link_skill playwright-cli
 }
 
+# ponytail (MIT): rules that push agents toward the smallest change that works.
+# Claude Code gets it as a plugin from its own marketplace. Cursor has no plugin
+# for it, so a checkout lives in ~/.local/share/ponytail and its installer merges
+# hooks pointing at that checkout into ~/.cursor/hooks.json, leaving other hooks
+# alone. Re-run by the weekly update.
+PONYTAIL_DIR="$HOME/.local/share/ponytail"
+install_ponytail() {
+	local claude
+	claude="$(command -v claude || echo "$HOME/.local/bin/claude")"
+	if "$claude" plugin marketplace list | grep -q 'DietrichGebert/ponytail'; then
+		"$claude" plugin marketplace update ponytail
+	else
+		"$claude" plugin marketplace add DietrichGebert/ponytail
+	fi
+	"$claude" plugin install ponytail@ponytail
+	"$claude" plugin update ponytail@ponytail
+
+	if [[ -d "$PONYTAIL_DIR/.git" ]]; then
+		git -C "$PONYTAIL_DIR" pull --ff-only -q
+	else
+		git clone -q --depth 1 https://github.com/DietrichGebert/ponytail "$PONYTAIL_DIR"
+	fi
+	node "$PONYTAIL_DIR/scripts/cursor-hooks.js" install
+}
+
+# csharp-lsp: Anthropic's Claude Code plugin that gives Claude go-to-definition,
+# find-references and diagnostics for C# through csharp-ls (a Roslyn-based
+# language server, installed as a global dotnet tool). The binary is linked into
+# ~/.local/bin so Claude finds it without ~/.dotnet/tools on PATH. Re-run by the
+# weekly update.
+install_csharp_lsp() {
+	local claude
+	claude="$(command -v claude || echo "$HOME/.local/bin/claude")"
+	"$HOME/.local/bin/dotnet" tool update --global csharp-ls
+	mkdir -p "$HOME/.local/bin"
+	ln -sfn "$HOME/.dotnet/tools/csharp-ls" "$HOME/.local/bin/csharp-ls"
+	"$claude" plugin marketplace update claude-plugins-official
+	"$claude" plugin install csharp-lsp@claude-plugins-official
+	"$claude" plugin update csharp-lsp@claude-plugins-official
+}
+
 # Language toolchains, kept at the latest stable release. Each install_* is also its
 # own update (the weekly update.sh re-runs them), and each lives in the user's home.
 # Binaries are linked into ~/.local/bin so GUI apps started from Hyprland find them
