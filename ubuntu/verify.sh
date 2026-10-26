@@ -83,7 +83,7 @@ for pair in \
 	fzf:apt_packages zoxide:apt_packages gm:apt_packages python3:apt_packages pipx:apt_packages \
 	node:install_node npm:install_node uv:install_python dotnet:install_dotnet cargo:install_rust go:install_go aspire:install_aspire \
 	wallust:install_wallust claude:install_claude_code agent:install_cursor_agent \
-	herdr:install_herdr playwright-cli:install_playwright_cli az:install_azure_cli cursor:install_cursor zed:install_zed \
+	herdr:install_herdr playwright-cli:install_playwright_cli az:install_azure_cli coder:install_coder cursor:install_cursor zed:install_zed \
 	kitty:install_kitty kitten:install_kitty theme:setup_theme Hyprland:install_hyprland \
 	waybar:apt_packages mako:apt_packages fuzzel:apt_packages firefox:setup_firefox; do
 	check "${pair#*:}" "${pair%%:*} on PATH" command -v "${pair%%:*}"

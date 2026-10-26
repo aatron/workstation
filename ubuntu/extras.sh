@@ -158,6 +158,12 @@ install_azure_cli() {
 	sudo apt-get install -y azure-cli
 }
 
+# https://coder.com/docs/install/cli — standalone into ~/.local (no root).
+install_coder() {
+	have coder || [[ -x "$HOME/.local/bin/coder" ]] ||
+		curl -fsSL https://coder.com/install.sh | sh -s -- --method standalone --prefix "$HOME/.local"
+}
+
 # Install the IDs listed in cursor/extensions.txt that Cursor doesn't have yet.
 install_cursor_extensions() {
 	local installed ext

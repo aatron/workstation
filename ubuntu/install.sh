@@ -40,6 +40,7 @@ STEPS=(
 	install_playwright_cli
 	install_playwright_skill
 	install_azure_cli
+	install_coder
 	# IDEs
 	install_cursor
 	install_cursor_extensions
