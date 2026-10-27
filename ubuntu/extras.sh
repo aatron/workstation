@@ -588,14 +588,33 @@ install_hyprland_skill() {
 	link_skill hyprland-control
 }
 
-# Playwright CLI (Microsoft, Apache-2.0): browser automation from the shell. The
-# package is global under the fnm node, so it is linked into ~/.local/bin like node.
-# install-browser downloads the browser it drives. Re-run by the weekly update.
+# Playwright CLI (Microsoft, Apache-2.0): browser automation from the shell.
+# Global under whatever npm is on PATH (fnm after install_node); linked into
+# ~/.local/bin like node. install-browser downloads the browsers. Re-run by the
+# weekly update. Host libraries: install_playwright_host_deps.
 install_playwright_cli() {
+	local src
 	mkdir -p "$HOME/.local/bin"
 	npm install -g @playwright/cli@latest
-	ln -sfn "$HOME/.local/share/fnm/aliases/default/bin/playwright-cli" "$HOME/.local/bin/playwright-cli"
+	src="$(npm prefix -g)/bin/playwright-cli"
+	[[ -x $src ]] || { echo "playwright-cli missing at $src after npm install -g" >&2; return 1; }
+	ln -sfn "$src" "$HOME/.local/bin/playwright-cli"
 	"$HOME/.local/bin/playwright-cli" install-browser
+}
+
+# System libraries the downloaded browsers need. Playwright owns the package list
+# per release (npx playwright install-deps). Runs as root in the weekly update;
+# under install.sh, as_root is sudo (password already cached by sudo -v).
+# Resolve node/npm as the user first: sudo's secure_path does not include
+# ~/.local/bin or nvm/fnm, so a bare `node` fails even when the user has it.
+install_playwright_host_deps() {
+	local user_path="$USER_HOME/.local/bin:$PATH" npm_root pw_cli node
+	npm_root="$(as_user env PATH="$user_path" npm root -g)"
+	node="$(as_user env PATH="$user_path" bash -c 'command -v node')"
+	pw_cli="$npm_root/@playwright/cli/node_modules/playwright-core/cli.js"
+	[[ -f $pw_cli ]] || { echo "playwright-core missing at $pw_cli (run install_playwright_cli first)" >&2; return 1; }
+	[[ -x $node ]] || { echo "node not found on PATH for $WORKSTATION_USER" >&2; return 1; }
+	as_root "$node" "$pw_cli" install-deps
 }
 
 # The skill that ships inside the installed package, so it always matches the CLI.

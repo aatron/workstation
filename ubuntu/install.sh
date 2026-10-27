@@ -38,6 +38,7 @@ STEPS=(
 	install_herdr_skill
 	install_hyprland_skill
 	install_playwright_cli
+	install_playwright_host_deps
 	install_playwright_skill
 	install_azure_cli
 	install_coder
@@ -87,19 +88,10 @@ if [[ ${VERSION_CODENAME:-} != resolute && -z ${ALLOW_OTHER_RELEASE:-} ]]; then
 	echo "Set ALLOW_OTHER_RELEASE=1 to try anyway." >&2
 	exit 1
 fi
-if ! pro status --format json 2>/dev/null | grep -Eq '"attached": ?true'; then
-	echo "Attach Ubuntu Pro first (ntfy comes from its esm-apps repo): sudo pro attach <token>" >&2
-	exit 1
-fi
 if [[ ! -S ${XDG_RUNTIME_DIR:-/nonexistent}/bus ]]; then
 	echo "Run this from a terminal inside the desktop session (it needs your user D-Bus session)." >&2
 	exit 1
 fi
-
-# Ask for the sudo password once and keep it valid: the Hyprland build alone runs
-# longer than sudo's default 15 minute timeout. The loop ends when this script does.
-sudo -v
-(while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 50; done) &
 
 if (($# > 0)); then
 	for want in "$@"; do
@@ -109,6 +101,23 @@ if (($# > 0)); then
 else
 	run=("${STEPS[@]}")
 fi
+
+# ntfy comes from Ubuntu Pro's esm-apps repo. Require Pro for a full install, or
+# when the run includes an ntfy step.
+needs_pro=0
+(($# == 0)) && needs_pro=1
+for step in "${run[@]}"; do
+	[[ $step == install_ntfy || $step == setup_ntfy_client || $step == ntfy_test ]] && needs_pro=1
+done
+if ((needs_pro)) && ! pro status --format json 2>/dev/null | grep -Eq '"attached": ?true'; then
+	echo "Attach Ubuntu Pro first (ntfy comes from its esm-apps repo): sudo pro attach <token>" >&2
+	exit 1
+fi
+
+# Ask for the sudo password once and keep it valid: the Hyprland build alone runs
+# longer than sudo's default 15 minute timeout. The loop ends when this script does.
+sudo -v
+(while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 50; done) &
 
 mkdir -p "$(dirname "$LOG")"
 exec > >(tee -a "$LOG") 2>&1

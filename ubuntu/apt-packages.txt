@@ -44,7 +44,5 @@ fonts-jetbrains-mono
 libreoffice
 onedrive
 
-# Libraries the Playwright browser needs (see install_playwright_cli)
-libevent-2.1-7t64
-libavif16
-libmanette-0.2-0
+# Playwright browser host libraries: install_playwright_host_deps (Playwright's
+# install-deps), not a hand-maintained list here.
