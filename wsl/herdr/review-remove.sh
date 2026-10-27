@@ -1,63 +1,38 @@
 #!/usr/bin/env bash
 #
 # review-remove.sh
-# Clean up local code reviews whose pull requests have finished.
+# Clean up local code-review folders (and their herdr rows).
 #
-# usage: review-remove.sh [<work-item-id>] [options]
-#          no id          examine every review under the review root
-#          <id>           examine only that one
+# usage: review-remove.sh [<work-item-id>...] [options]
+#          no id, interactive   multi-select which reviews to remove now
+#          no id, --yes         scheduled scan: only reviews whose PRs are done
+#          <id> [...]           remove those reviews now (no PR-status gate)
 #
 #        --dry-run             print what would go, remove nothing
 #        --yes                 skip the confirmation (also WT_ASSUME_YES=1)
-#        --include-abandoned   treat an abandoned PR as finished too
-#        --force-dirty         remove a checkout that has uncommitted changes
-#        --discard-notes       delete notes instead of archiving them
+#        --include-abandoned   treat an abandoned PR as finished too (scan mode)
+#        --force-dirty         discard dirty checkouts (implied when ids given)
 #        -h, --help
 #
-# This is the bash counterpart of win/herdr/review-remove.ps1. Fix a bug in one
-# and fix it in the other.
+# TWO MODES
+#   Explicit id(s) or interactive pick: remove now - open PRs, dirty checkouts,
+#   and extra panes under that folder do not block. Notes stay in the review
+#   folder and are deleted with it (no separate archive).
 #
-# WHY THIS EXISTS SEPARATELY FROM worktree-remove.sh:
-#   worktree-remove.sh takes a story id from a human and deletes it, branches
-#   and all. This is the opposite: it is meant to run on a SCHEDULE with no one
-#   watching, so it decides for itself what is safe to delete, and the bar it has
-#   to clear is "the PR is finished, nothing here is unsaved". It is the cleanup
-#   half of review-make.sh and the step before that cleanup runs automatically.
-#
-# THE RULE: A REVIEW GOES ONLY WHEN THE WHOLE REVIEW IS DONE
-#   A work item can carry several PRs, in several repos. The item's folder and its
-#   sidebar rows are removed only when EVERY one of those PRs has completed. One
-#   PR still active holds the whole review in place, because a half-removed review
-#   is worse than one that is late: the rows that survive no longer say what they
-#   are missing.
-#
-#   A PR whose status cannot be read is NOT treated as finished. An expired
-#   token, a network blip or a renamed repo must never be the reason a review
-#   disappears, so anything short of a definite "completed" keeps it.
+#   No id + --yes (scan / cron): only remove a review when EVERY linked PR is
+#   finished (completed, plus abandoned if --include-abandoned). Dirty checkouts
+#   and foreign panes still hold a review back unless --force-dirty.
 #
 # WHAT IT WILL NOT DO
-#   * touch Azure DevOps. Every az call goes through az_read, which refuses
-#     anything not on $AZ_READ_ONLY. It reads PR status; it never votes, comments,
-#     or changes a work item. This script cannot approve a review for you.
-#   * delete work you typed. A checkout with uncommitted changes holds its review
-#     back (exit 5) unless --force-dirty. Notes files with anything in them are
-#     MOVED to <review root>/_notes/ rather than deleted - see save_notes.
-#   * half-remove anything. A workspace of yours parked in the review folder also
-#     holds the review back, because its pane keeps the directory open and the
-#     delete would fail only after the rows were closed and the worktree
-#     deregistered.
-#   * close the "Review" root row. Every review shares it, and a scheduled job
-#     yanking the workspace you are sitting in is not acceptable. It stays even
-#     when the last review under it goes.
-#   * delete a branch. Review checkouts are detached (review-make.sh uses
-#     `git worktree add --detach`), so there is no branch to delete and no way
-#     this can remove someone's work by name.
+#   * touch Azure DevOps. Every az call goes through az_read (read-only).
+#   * close the shared "Review" root row.
+#   * delete a branch (checkouts are detached).
 #
 # Exit codes:
 #   0  at least one review was removed
 #   1  bad usage / a removal failed
-#   3  nothing to do - no review had all of its PRs finished
-#   5  a review was held back because a checkout has uncommitted changes
+#   3  nothing to do
+#   5  a review was held back (scan mode only)
 #
 set -uo pipefail
 
@@ -72,9 +47,6 @@ SRC_ROOT="${WT_REVIEW_SRC_ROOT:-$HOME/source/repos}"
 # --include-abandoned: an abandoned PR is dead code, but deleting the review of
 # one is a judgement call, so it is opt-in.
 DONE_STATUS=(completed)
-
-# Where a notes file with anything in it goes instead of the bin.
-NOTES_ARCHIVE='_notes'
 
 # Tree connectors, matching review-make.sh - they are reported as each row's
 # $tree sidebar token, and removing a review means the survivors' connectors have
@@ -98,31 +70,31 @@ HELD=0
 FAILED=0
 EXAMINED=0
 
-ONLY=''
+declare -a ONLY_IDS=()
 DRY_RUN=0
 ASSUME_YES=0
 [[ "${WT_ASSUME_YES:-}" == "1" ]] && ASSUME_YES=1
 INCLUDE_ABANDONED=0
 FORCE_DIRTY=0
 [[ "${WT_FORCE_DIRTY:-}" == "1" ]] && FORCE_DIRTY=1
-DISCARD_NOTES=0
 
 show_usage() {
   cat <<'EOF'
-usage: review-remove.sh [<work-item-id>] [options]
+usage: review-remove.sh [<work-item-id>...] [options]
 
-  no id                 examine every review under the review root
-  <work-item-id>        examine only that review
+  no id (interactive)   multi-select reviews to remove now
+  no id --yes           scan: remove only reviews whose PRs are all finished
+  <work-item-id>...     remove those reviews now (ignores PR status)
 
 options:
   --dry-run             print the intended actions; remove nothing
   --yes                 do not ask for confirmation (for scheduled runs)
-  --include-abandoned   treat an abandoned PR as finished as well as completed
-  --force-dirty         remove a checkout even if it has uncommitted changes
-  --discard-notes       delete notes files instead of archiving them
+  --include-abandoned   (scan) treat abandoned PRs as finished too
+  --force-dirty         (scan) remove even if a checkout has local changes
+                        (always on when ids are given / picked)
   -h, --help            this text
 
-A review is removed only when EVERY pull request on its work item has finished.
+Notes live in each review/<id>/ folder and are removed with that folder.
 Azure DevOps is read, never written.
 EOF
 }
@@ -135,7 +107,9 @@ while (( $# > 0 )); do
         --yes)               ASSUME_YES=1 ;;
         --include-abandoned) INCLUDE_ABANDONED=1 ;;
         --force-dirty)       FORCE_DIRTY=1 ;;
-        --discard-notes)     DISCARD_NOTES=1 ;;
+        --discard-notes)
+          # Legacy no-op: notes stay in the review folder and are deleted with it.
+          ;;
         -h|--help)           show_usage; exit 0 ;;
         *)
           echo "unknown argument: $1" >&2
@@ -144,11 +118,20 @@ while (( $# > 0 )); do
           ;;
       esac
       ;;
-    *) ONLY="$1" ;;
+    *) ONLY_IDS+=("$1") ;;
   esac
   shift
 done
 (( INCLUDE_ABANDONED )) && DONE_STATUS+=(abandoned)
+
+# herdr-plus quick actions run with stdin = /dev/null. Prefer the pane PTY.
+if [[ "$ASSUME_YES" != "1" && ! -t 0 ]]; then
+  if [[ -t 1 ]]; then
+    exec <&1
+  elif [[ -r /dev/tty ]]; then
+    exec </dev/tty
+  fi
+fi
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1" >&2; exit 1; }; }
 
@@ -156,6 +139,9 @@ AZ_CMD="${WT_REVIEW_AZ:-az}"
 
 need herdr; need git; need jq
 [[ -n "${WT_REVIEW_AZ:-}" ]] || need az
+if (( ASSUME_YES == 0 )); then
+  need gum
+fi
 
 # ---------------------------------------------------------------------------
 # Azure DevOps: read only, enforced. Same guard as review-make.sh - the check is
@@ -470,49 +456,18 @@ pr_disposition() {
 # ---------------------------------------------------------------------------
 
 # A directory herdr had a pane in does not always release immediately.
+# review-make.sh chmods PR checkouts read-only; restore write before rm -rf.
 remove_dir_retry() {
   local path="$1" attempt
   for attempt in 1 2 3 4; do
     [[ -e "$path" ]] || return 0
+    chmod -R u+w "$path" 2>/dev/null || true
     rm -rf "$path" 2>/dev/null || true
     [[ -e "$path" ]] || return 0
     sleep "0.$((2 * attempt))"
   done
   [[ -e "$path" ]] && return 1
   return 0
-}
-
-# Notes are the one thing here a human wrote. An empty file is noise and goes
-# with the rest; anything with content is moved out to the archive, because a
-# scheduled job silently deleting your review notes is not a trade worth making.
-save_notes() {   # save_notes <item-dir> <review-root>
-  local item_dir="$1" review_root="$2" n base archive dest stamp
-  archive="${review_root}/${NOTES_ARCHIVE}"
-  while IFS= read -r n; do
-    [[ -n "$n" ]] || continue
-    [[ -s "$n" ]] || continue
-    base="$(basename "$n")"
-    if (( DISCARD_NOTES )); then
-      echo "   discarding notes (--discard-notes): ${base}"
-      continue
-    fi
-    (( DRY_RUN )) || mkdir -p "$archive"
-    dest="${archive}/${base}"
-    # Never overwrite an archived copy from an earlier review of the same id.
-    if [[ -e "$dest" ]]; then
-      stamp=2
-      while [[ -e "$dest" ]]; do
-        dest="${archive}/${base%.txt}-${stamp}.txt"
-        stamp=$((stamp + 1))
-      done
-    fi
-    if (( DRY_RUN )); then
-      echo "   would archive notes: ${base} -> ${dest}"
-    else
-      mv -f "$n" "$dest"
-      echo "   archived notes: ${dest}"
-    fi
-  done < <(find "$item_dir" -maxdepth 1 -type f -name '*-notes.txt' 2>/dev/null | LC_ALL=C sort)
 }
 
 # Re-report the connectors of whatever reviews are left, so the corner lands on
@@ -567,30 +522,109 @@ join_or() {
   done
   printf '%s' "$out"
 }
-echo "-> finished means: $(join_or "${DONE_STATUS[@]}")"
+# Numeric review folders under REVIEW_ROOT, newest first.
+list_review_ids() {
+  local d
+  [[ -d "$REVIEW_ROOT" ]] || return 0
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    printf '%s\t%s\n' "$(stat -c %Y "${REVIEW_ROOT}/${d}" 2>/dev/null || echo 0)" "$d"
+  done < <(find "$REVIEW_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
+           | grep -E '^[0-9]+$') \
+    | sort -rn | cut -f2
+}
+
+# Interactive pick of bare work-item ids (newest first from list_review_ids).
+# Prints selected ids (one per line) on stdout.
+#
+# Do NOT use gum --select-if-one: with one review it skips the UI and returns
+# immediately. One review = single-select (Enter confirms). Several = multi-select
+# (space toggles, Enter confirms).
+pick_review_ids() {
+  local -a ids=() selected=() out=()
+  local height o
+  mapfile -t ids < <(list_review_ids)
+  (( ${#ids[@]} > 0 )) || {
+    echo "no reviews under ${REVIEW_ROOT}" >&2
+    return 1
+  }
+  height=${#ids[@]}
+  (( height > 15 )) && height=15
+  (( height < 3 )) && height=3
+  if (( ${#ids[@]} == 1 )); then
+    mapfile -t selected < <(
+      gum choose \
+        --header "Delete this review? (enter confirms, esc cancels)" \
+        --height "$height" \
+        "${ids[@]}"
+    ) || return 1
+  else
+    mapfile -t selected < <(
+      gum choose --no-limit --ordered \
+        --header "Reviews to delete (space toggles, enter confirms, esc cancels)" \
+        --height "$height" \
+        "${ids[@]}"
+    ) || return 1
+  fi
+  for o in "${selected[@]}"; do
+    o="${o//$'\r'/}"
+    o="${o#"${o%%[![:space:]]*}"}"
+    o="${o%"${o##*[![:space:]]}"}"
+    [[ "$o" =~ ^[0-9]+$ ]] || continue
+    out+=("$o")
+  done
+  (( ${#out[@]} > 0 )) || {
+    echo "no reviews selected" >&2
+    return 1
+  }
+  printf '%s\n' "${out[@]}"
+}
 
 if [[ ! -d "$REVIEW_ROOT" ]]; then
   echo '-> no review root on disk - nothing to do'
   exit 3
 fi
 
+# Explicit id(s) or interactive pick => remove now. --yes with no ids => scan.
+FORCE_NOW=0
 declare -a ITEM_DIRS=()
-if [[ -n "$ONLY" ]]; then
-  if [[ ! -d "${REVIEW_ROOT}/${ONLY}" ]]; then
-    echo "-> no local review for work item ${ONLY} (${REVIEW_ROOT}/${ONLY})"
-    exit 3
-  fi
-  ITEM_DIRS=("${REVIEW_ROOT}/${ONLY}")
-else
-  # Only numeric directories are reviews. This skips the notes archive and the
-  # repo-centric folders an older worktree-make left directly under review/.
+if (( ${#ONLY_IDS[@]} > 0 )); then
+  FORCE_NOW=1
+  FORCE_DIRTY=1
+  echo "-> mode: remove work item(s) now (no PR-status gate): ${ONLY_IDS[*]}"
+  for id in "${ONLY_IDS[@]}"; do
+    if [[ ! -d "${REVIEW_ROOT}/${id}" ]]; then
+      echo "WARNING: no local review for work item ${id} (${REVIEW_ROOT}/${id})" >&2
+      continue
+    fi
+    ITEM_DIRS+=("${REVIEW_ROOT}/${id}")
+  done
+elif (( ASSUME_YES )); then
+  echo "-> mode: scan (remove only when every PR is finished)"
+  echo "-> finished means: $(join_or "${DONE_STATUS[@]}")"
   while IFS= read -r d; do
     [[ -n "$d" ]] || continue
     ITEM_DIRS+=("${REVIEW_ROOT}/${d}")
-  done < <(find "$REVIEW_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null \
-           | grep -E '^[0-9]+$' | LC_ALL=C sort)
+  done < <(list_review_ids)
+else
+  echo "-> mode: pick reviews to remove now"
+  # Process substitution hides the picker's exit status — capture it explicitly.
+  _pick_out="$(pick_review_ids)" || exit 1
+  mapfile -t ONLY_IDS <<<"$_pick_out"
+  unset _pick_out
+  FORCE_NOW=1
+  FORCE_DIRTY=1
+  echo "-> selected: ${ONLY_IDS[*]}"
+  for id in "${ONLY_IDS[@]}"; do
+    [[ -n "$id" ]] || continue
+    ITEM_DIRS+=("${REVIEW_ROOT}/${id}")
+  done
 fi
 if (( ${#ITEM_DIRS[@]} == 0 )); then
+  if (( FORCE_NOW )); then
+    echo '-> nothing to remove' >&2
+    exit 3
+  fi
   echo '-> no reviews on disk - nothing to do'
   exit 3
 fi
@@ -608,38 +642,50 @@ for dir in "${ITEM_DIRS[@]}"; do
   echo "-- work item ${id}"
 
   prs_out="$(review_prs "$id" "$dir")" || prs_out="__UNREADABLE__"
+  declare -a PRS=()
   if [[ "$prs_out" == "__UNREADABLE__" || -z "$prs_out" ]]; then
-    echo '   cannot tell which PRs this review covers - leaving it alone'
-    continue
-  fi
-  mapfile -t PRS < <(printf '%s\n' "$prs_out")
-  froms="$(printf '%s\n' "${PRS[@]}" | cut -f5 | sort -u | paste -sd'/' -)"
-  echo "   ${#PRS[@]} PR(s), from ${froms}"
-
-  all_done=1
-  done_count=0
-  for line in "${PRS[@]}"; do
-    IFS=$'\t' read -r prId folder repoDir azRepo from <<<"$line"
-    pr_disposition "$prId"
-    echo "   PR ${prId} (${azRepo}): ${PR_STATUS_TEXT}"
-    if [[ "$PR_STATE" == "done" ]]; then
-      done_count=$((done_count + 1))
-    else
-      all_done=0
+    if (( ! FORCE_NOW )); then
+      echo '   cannot tell which PRs this review covers - leaving it alone'
+      continue
     fi
-  done
-  if (( ! all_done )); then
-    echo "   holding: ${done_count}/${#PRS[@]} finished - a review goes only when all of them have"
-    continue
+    echo '   WARNING: could not read linked PRs - removing the folder from disk anyway'
+  else
+    mapfile -t PRS < <(printf '%s\n' "$prs_out")
+    froms="$(printf '%s\n' "${PRS[@]}" | cut -f5 | sort -u | paste -sd'/' -)"
+    echo "   ${#PRS[@]} PR(s), from ${froms}"
+
+    all_done=1
+    done_count=0
+    for line in "${PRS[@]}"; do
+      IFS=$'\t' read -r prId folder repoDir azRepo from <<<"$line"
+      pr_disposition "$prId"
+      echo "   PR ${prId} (${azRepo}): ${PR_STATUS_TEXT}"
+      if [[ "$PR_STATE" == "done" ]]; then
+        done_count=$((done_count + 1))
+      else
+        all_done=0
+      fi
+    done
+    if (( ! all_done )) && (( ! FORCE_NOW )); then
+      echo "   holding: ${done_count}/${#PRS[@]} finished - scan mode waits until all are done"
+      echo '   (pass the work item id to remove this review now)'
+      continue
+    fi
+    if (( ! all_done )) && (( FORCE_NOW )); then
+      echo "   note: ${done_count}/${#PRS[@]} PR(s) finished - removing anyway (forced)"
+    fi
   fi
 
-  # Everything on the item is finished. Now: is anything here unsaved?
   wts=""
   dirty=""
   names=("$id")
-  for line in "${PRS[@]}"; do
+  declare -A seen_folder=()
+  for line in "${PRS[@]:-}"; do
+    [[ -n "$line" ]] || continue
     IFS=$'\t' read -r prId folder repoDir azRepo from <<<"$line"
+    [[ -n "$folder" ]] || continue
     names+=("$folder")
+    seen_folder["$folder"]=1
     path="${dir}/${folder}"
     [[ -e "${path}/.git" ]] || continue
     changes="$(git -C "$path" status --porcelain 2>/dev/null | grep -c . || true)"
@@ -656,6 +702,30 @@ for dir in "${ITEM_DIRS[@]}"; do
     [[ -n "$wts" ]] && wts+=$'\n'
     wts+="${path}"$'\t'"${owner}"$'\t'"${folder}"
   done
+  # Also pick up checkout folders not listed in the PR index (forced remove /
+  # stale layout).
+  while IFS= read -r folder; do
+    [[ -n "$folder" ]] || continue
+    [[ -n "${seen_folder[$folder]:-}" ]] && continue
+    path="${dir}/${folder}"
+    [[ -e "${path}/.git" ]] || continue
+    names+=("$folder")
+    seen_folder["$folder"]=1
+    changes="$(git -C "$path" status --porcelain 2>/dev/null | grep -c . || true)"
+    [[ "$changes" =~ ^[0-9]+$ ]] || changes=0
+    if (( changes > 0 )); then
+      [[ -n "$dirty" ]] && dirty+=", "
+      dirty+="${folder} (${changes} change(s))"
+    fi
+    owner="$(worktree_owner "$path")"
+    if [[ -z "$owner" ]]; then
+      owner="${SRC_ROOT}/${folder}"
+      echo "WARNING: could not read the owning clone from ${path}/.git - falling back to ${owner}" >&2
+    fi
+    [[ -n "$wts" ]] && wts+=$'\n'
+    wts+="${path}"$'\t'"${owner}"$'\t'"${folder}"
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | LC_ALL=C sort)
+
   if [[ -n "$dirty" ]] && (( ! FORCE_DIRTY )); then
     echo "   HELD BACK: uncommitted changes in ${dirty}"
     echo '   commit or discard them, or re-run with --force-dirty'
@@ -663,19 +733,14 @@ for dir in "${ITEM_DIRS[@]}"; do
     continue
   fi
   if [[ -n "$dirty" ]]; then
-    echo "WARNING: --force-dirty: discarding uncommitted changes in ${dirty}" >&2
+    echo "WARNING: discarding uncommitted changes in ${dirty}" >&2
   fi
 
-  # The names this review's rows are allowed to have: the work item id, and one
-  # per PR folder. Anything else sitting at these paths belongs to someone else.
   rows_under "$dir" "${names[@]}"
 
-  # A workspace of yours parked in this folder is a hard stop, not a warning.
-  # Its pane holds an open handle on the directory, so the delete fails - and it
-  # fails AFTER the rows have been closed and the worktree deregistered, leaving
-  # exactly the half-removed review this script refuses to produce elsewhere.
-  # Held back instead: nothing is touched, and the message says what to do.
-  if (( ${#ROWS_FOREIGN[@]} > 0 )); then
+  # Scan mode: a foreign pane in this folder is a hard stop (avoids half-delete).
+  # Explicit id: close those rows too - you asked to remove this review now.
+  if (( ${#ROWS_FOREIGN[@]} > 0 )) && (( ! FORCE_NOW )); then
     foreign=""
     for line in "${ROWS_FOREIGN[@]}"; do
       IFS=$'\t' read -r rid rlabel <<<"$line"
@@ -687,10 +752,16 @@ for dir in "${ITEM_DIRS[@]}"; do
     HELD=$((HELD + 1))
     continue
   fi
+  if (( ${#ROWS_FOREIGN[@]} > 0 )) && (( FORCE_NOW )); then
+    echo "   note: closing extra workspace row(s) under this review (forced)"
+    ROWS_OURS+=("${ROWS_FOREIGN[@]}")
+  fi
 
+  reason="all ${#PRS[@]} PR(s) finished"
+  (( FORCE_NOW )) && reason="requested (work item ${id})"
   PLAN_ID+=("$id")
   PLAN_DIR+=("$dir")
-  PLAN_REASON+=("all ${#PRS[@]} PR(s) finished")
+  PLAN_REASON+=("$reason")
   PLAN_WTS+=("$wts")
   PLAN_ROWS+=("$(printf '%s\n' "${ROWS_OURS[@]:-}")")
 done
@@ -717,7 +788,8 @@ echo '  (the shared "Review" row is left open)'
 
 if (( ! DRY_RUN )) && (( ! ASSUME_YES )); then
   if command -v gum >/dev/null 2>&1; then
-    if ! gum confirm "Remove ${#PLAN_ID[@]} finished review(s)?"; then
+    confirm_msg="Remove ${#PLAN_ID[@]} review(s)?"
+    if ! gum confirm "$confirm_msg"; then
       echo '-> cancelled'
       exit 3
     fi
@@ -754,7 +826,10 @@ for i in "${!PLAN_ID[@]}"; do
       echo "   would remove worktree ${wpath} (owner ${wowner})"
       continue
     fi
-    if (( FORCE_DIRTY )); then
+    # review-make.sh chmods checkouts read-only; unlock so git can remove them.
+    chmod -R u+w "$wpath" 2>/dev/null || true
+    # Explicit id always force-removes; scan uses --force-dirty when set.
+    if (( FORCE_DIRTY )) || (( FORCE_NOW )); then
       rm_ok=0; git_run "$wowner" worktree remove --force "$wpath" && rm_ok=1
     else
       rm_ok=0; git_run "$wowner" worktree remove "$wpath" && rm_ok=1
@@ -770,15 +845,14 @@ for i in "${!PLAN_ID[@]}"; do
     git -C "$wowner" worktree prune >/dev/null 2>&1 || true
   done <<<"${PLAN_WTS[$i]}"
 
-  save_notes "${PLAN_DIR[$i]}" "$REVIEW_ROOT"
-
+  # Notes live under the review folder (review-<id>-*.txt) and go with it.
   if (( DRY_RUN )); then
-    echo "   would delete ${PLAN_DIR[$i]}"
+    echo "   would delete ${PLAN_DIR[$i]} (notes included)"
     REMOVED=$((REMOVED + 1))
     continue
   fi
   if remove_dir_retry "${PLAN_DIR[$i]}"; then
-    echo "   deleted ${PLAN_DIR[$i]}"
+    echo "   deleted ${PLAN_DIR[$i]} (notes included)"
   else
     echo "WARNING: could not delete ${PLAN_DIR[$i]} - something still holds it open" >&2
     ok=0

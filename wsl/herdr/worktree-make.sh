@@ -13,40 +13,23 @@
 #   herdr's sidebar groups workspaces by their source repository
 #   (worktree.repo_key) and nests linked worktrees under their primary clone.
 #   That grouping is built in - there is no config for it - so a workspace made
-#   with `herdr worktree create` ALWAYS lands under its clone, and a story
-#   spanning four repos became four unrelated rows in four different groups:
-#       repo1 -> {id}-{slug}
-#       repo2 -> {id}-{slug}
-#   `herdr worktree create --workspace <ID>` is not a way out: --workspace and
-#   --cwd are mutually exclusive, and --workspace only says which workspace to
-#   take the SOURCE REPO from - it still creates a workspace of its own.
-#   So this script adds the worktrees with plain `git worktree add` and builds
-#   the rows itself. A workspace with no worktree metadata is not grouped at all,
-#   so the sidebar reads story-first, one row per repo drawn beneath it:
-#       {id}-{slug}            cwd = the story folder
-#         |- repo1             cwd = {id}-{slug}/repo1
-#         `- repo2             cwd = {id}-{slug}/repo2
-#   The connectors need one line in config.toml - see init_story_workspace,
-#   which prints it when it is missing.
+#   with `herdr worktree create` ALWAYS lands under its clone. This script adds
+#   the git worktrees with plain `git worktree add` and creates ONE herdr
+#   workspace at the story folder (no worktree metadata, so it is not grouped
+#   under a clone). Repo checkouts live as subfolders; they do not get their
+#   own sidebar rows.
 #
-#   The story row carries four tabs at the story root, where one agent sees every
-#   repo in the story at once:
-#       notes   micro on the notes file of the first repo requested
+#   The story row carries four tabs at the story root:
+#       notes   micro on repos.txt (one related repo name per line, saved on disk)
 #       claude  $CLAUDE_CMD
 #       cursor  $CURSOR_CMD
 #       bash    bare shell
-#   Each repo row carries three tabs at that repo's worktree root:
-#       notes   micro on that repo's own notes file
-#       claude  $CLAUDE_CMD
-#       bash    bare shell
 #
-#   herdr has no real parent/child nesting - the sidebar is a flat list of
-#   spaces - so the connector is a per-row token, and the rows are pulled into
-#   one contiguous run explicitly (see set_sidebar_order).
-#
-#   Re-running for the same story reuses every workspace it already has and adds
-#   only the tabs that are missing. Commands are submitted ONLY into tabs the run
-#   created, so a tab you are already working in is never typed into.
+#   Re-running for the same story reuses the story workspace and adds only the
+#   tabs that are missing. Commands are submitted into any story tab whose pane
+#   is still an idle shell (herdr-plus layout often creates the tabs without
+#   starting their commands). A pane already running micro/claude/agent is left
+#   alone, so a tab you are working in is never typed into.
 #
 # Git behavior on create - THE SCRIPT OWNS THE BRANCH, NOT HERDR:
 #   `herdr worktree create --base <ref>` silently IGNORED --base when the local
@@ -81,8 +64,9 @@
 #
 # Folder structure produced (no feature/<you> prefix on the path):
 #   <herdr [worktrees].directory>/<type>/
-#       <id>-<slug>/                 <- story folder
-#           <id>-<slug>-<repo>.txt   <- per-repo notes (inside the story folder)
+#       <id>-<slug>/                 <- story folder (herdr workspace cwd)
+#           repos.txt                <- related repo names, one per line
+#           <id>-<slug>-<repo>.txt   <- per-repo notes (optional / herdr-plus)
 #           .notespath-<repo>        <- absolute path to that repo's notes file
 #           <repo>/                  <- git worktree
 #           <repo>/ ...
@@ -94,7 +78,7 @@
 #     WT_REPOS          csv of repos        (development)
 #     WT_BRANCH         full local branch name (development; default is
 #                       ${BRANCH_PREFIX}/${ID}-${SLUG})
-#     WT_CLAUDE_CMD     claude tab command (story + repo rows; story-make sets
+#     WT_CLAUDE_CMD     claude tab command (story row; story-make sets
 #                       manual mode + approve-first brief)
 #     WT_BRANCHES_FILE  file of "<repo>:<branch>" lines (review; replaces the
 #                       placeholder branch list)
@@ -115,6 +99,8 @@ set -euo pipefail
 SRC_ROOT="$HOME/source/repos"       # where your primary repo clones live
 # Override with WT_BRANCH_PREFIX if needed. Default uses $USER.
 BRANCH_PREFIX="${WT_BRANCH_PREFIX:-feature/${USER:-YOU}}"
+# Pinned to the top of the interactive repo picker (when present under SRC_ROOT).
+PREFERRED_REPOS=(FCTG_Monorepo fctg-sa-db fctg-nexus)
 # Story worktree base comes from Herdr config [worktrees].directory
 # (this workflow uses ~/source/worktrees). Set that in ~/.config/herdr/config.toml.
 #
@@ -132,58 +118,13 @@ CURSOR_CMD="agent --auto-review"
 # at the story root - the repos are sub-folders of it.
 STORY_TABS=(notes claude cursor bash)
 
-# The tabs of each repo's own workspace, opened at that repo's worktree root.
-REPO_TABS=(notes claude bash)
-
-# Tree connectors, reported as each repo row's $tree sidebar token so they render
-# to the LEFT of the state icon and the bullet indents with the tree:
-#
-#     *  23597-my-story
-#       |- . *  repo-a
-#       `- . *  repo-b
-#
-# This only renders if config.toml asks for it (see tree_token_configured):
-#
-#   [ui.sidebar.spaces]
-#   rows = [["$tree", "state_icon", "workspace"]]
-#
-# ABOUT THAT DOT: herdr joins the segments of a sidebar row with a hardcoded
-# " . " (a middle dot) and exposes no setting for it - not at [ui],
-# [ui.sidebar] or [ui.sidebar.spaces], and a row element's object form only
-# accepts token/bold/dim/fg. So a connector segment followed by state_icon always
-# shows it. Putting the connector in the LABEL instead avoids the dot, but then
-# the status bullet is stuck at the far left and stops reading as nested; that was
-# tried and rejected. Keeping the live bullet inside the tree is worth the dot -
-# do not "fix" this by moving the connector back into the label.
-#
-# Held in $'...' so the bytes are fixed at parse time. The Windows script builds
-# the same glyphs from char codes because PowerShell 5.1 reads a .ps1 as ANSI
-# unless it has a BOM; bash has no such problem with a UTF-8 file, but keep them
-# in one place here all the same so a swap only has to happen once.
-TREE_C_TEE=$'├'     # the vertical-and-right of a mid-list connector
-TREE_C_ELBOW=$'└'   # the up-and-right of the last one
-TREE_C_PIPE=$'│'    # only ever seen on adopted labels, see bare_label
-TREE_C_DASH=$'─'    # the horizontal arm of both
-TREE_C_BLANK=$'⠀'   # braille pattern blank
-TREE_BRANCH="${TREE_C_TEE}${TREE_C_DASH}"   # |- for all but the last repo
-TREE_LAST="${TREE_C_ELBOW}${TREE_C_DASH}"   # `- for the last one
-# Swap both for '|-' and '`-' if your terminal font has no box-drawing glyphs.
-
-# Two blank columns in front of a repo row's connector, so it sits inside its
-# story rather than flush under the story's own bullet.
-#
-# NOT two spaces: herdr TRIMS LEADING WHITESPACE off a token value, so '  |-'
-# arrives as '|-' and the indent silently disappears. U+2800 BRAILLE PATTERN BLANK
-# is blank on screen but is not whitespace to a trimmer, so it holds the first
-# column open; the second can be an ordinary space because interior spaces are
-# kept. If U+2800 shows as a box in your font, use two spaces and accept that the
-# indent is lost, or pick another blank-but-not-whitespace glyph.
-TREE_INDENT="${TREE_C_BLANK} "
-
-# Fallback indent, used only when config.toml does NOT render the $tree token.
-# It goes in the label, so it shifts the text but not the bullet - which is
-# exactly the limitation $tree exists to fix.
-CHILD_LABEL_PREFIX="  "
+# Glyphs stripped from legacy labels (older builds drew tree connectors in the
+# label). Held in $'...' so the bytes are fixed at parse time.
+TREE_C_TEE=$'├'
+TREE_C_ELBOW=$'└'
+TREE_C_PIPE=$'│'
+TREE_C_DASH=$'─'
+TREE_C_BLANK=$'⠀'
 
 # ===========================================================================
 TYPE="${1:-}"
@@ -260,185 +201,8 @@ join_commas() {
   printf '%s\n' "$out"
 }
 
-# ---------------------------------------------------------------------------
-# Talking to the API socket directly
-#
-# herdr appends every new workspace to the END of the sidebar. That is fine when
-# a story is built in one go, but adding a repo to a story that already exists
-# drops the new row at the bottom of the sidebar, adrift from the story it
-# belongs to - and no amount of connector drawing fixes a row that is thirty
-# rows away from its parent.
-#
-# The protocol has the fix: workspace.move_block takes an ordered list of
-# workspace ids plus an anchor to gather them in front of. `herdr workspace` has
-# no move subcommand, so it is unreachable through the CLI and this has to speak
-# to the socket itself.
-#
-# On Linux the socket is a real AF_UNIX stream socket and the protocol is plain
-# newline-delimited JSON - no handshake, no token. (The Windows script does the
-# same thing over a named pipe whose name is the socket file's own path; that is
-# the only part of this that differs between the two.) python3 is used rather
-# than socat or `nc -U` because it is the one of the three that is always there,
-# and it can bound the read with a timeout.
-#
-# This is a display nicety, so every failure here is swallowed - no python3, an
-# unreachable socket, an older herdr without the method. The rows are already
-# correct; only their order suffers.
-# ---------------------------------------------------------------------------
 herdr_config_path() {
   printf '%s\n' "${HERDR_CONFIG_PATH:-$HOME/.config/herdr/config.toml}"
-}
-
-# Two things this must NOT do.
-#
-# It must not derive the socket from HERDR_CONFIG_PATH. That variable names a
-# config FILE, which can sit anywhere - the test harness points it at a fixture -
-# whereas the socket always lives in herdr's own directory. herdr's CLI resolves
-# it this way too, which is why every `herdr` command still reaches the server
-# when HERDR_CONFIG_PATH is pointed somewhere else entirely.
-#
-# And it must not assume the default session. A NAMED session gets its own socket
-# under sessions/<name>/; a script that ignored HERDR_SESSION would talk to the
-# 'default' server (or to nothing at all) while every herdr command it ran went
-# somewhere else. herdr sets HERDR_SESSION in the environment of every pane it
-# starts, so a script launched from a quick action inherits the right one.
-herdr_socket_path() {
-  if [[ -n "${HERDR_SOCKET_PATH:-}" ]]; then
-    printf '%s\n' "$HERDR_SOCKET_PATH"; return 0
-  fi
-  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/herdr"
-  if [[ -n "${HERDR_SESSION:-}" ]]; then
-    printf '%s\n' "${dir}/sessions/${HERDR_SESSION}/herdr.sock"; return 0
-  fi
-  printf '%s\n' "${dir}/herdr.sock"
-}
-
-# One request, one response line. $2 is the params object as JSON text.
-herdr_socket() {
-  local method="$1" params="$2" sock
-  sock="$(herdr_socket_path)"
-  [[ -S "$sock" ]] || return 1
-  command -v python3 >/dev/null 2>&1 || return 1
-  python3 - "$sock" "$method" "$params" <<'PY' 2>/dev/null
-import json, socket, sys
-
-sock_path, method, params = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(5)
-    s.connect(sock_path)
-    req = {"id": "worktree-make", "method": method, "params": json.loads(params)}
-    s.sendall((json.dumps(req) + "\n").encode())
-    buf = b""
-    while b"\n" not in buf:
-        chunk = s.recv(65536)
-        if not chunk:
-            break
-        buf += chunk
-    s.close()
-except Exception:
-    sys.exit(1)
-line = buf.decode("utf-8", "replace").split("\n", 1)[0].strip()
-if not line:
-    sys.exit(1)
-sys.stdout.write(line)
-PY
-}
-
-# Every workspace id in sidebar order, worktree-backed rows included. The rest of
-# the script deliberately ignores those, but they still occupy sidebar positions,
-# so ordering has to see the whole list to pick a correct anchor.
-sidebar_ids() {
-  herdr_json workspace list 2>/dev/null | jq -r '.result.workspaces[]?.workspace_id // empty'
-}
-
-# Move one workspace to an absolute 0-based position in the sidebar.
-#
-# workspace.move is used rather than the newer workspace.move_block because it is
-# the only reordering call present on BOTH herdr builds this repo targets: the
-# Windows machine runs a 0.7.5 preview (protocol 18, which has move_block), WSL
-# runs plain 0.7.5 (protocol 17, which does not). Driving the older, narrower
-# call from both sides keeps the two behaving identically instead of quietly
-# doing nothing on whichever machine is behind.
-#
-# Semantics, verified against a live server: the workspace is removed from the
-# list and re-inserted so that it ends up AT insert_index in the resulting list.
-move_workspace() {
-  local ws="$1" index="$2" resp params
-  params="$(jq -cn --arg w "$ws" --argjson i "$index" \
-    '{workspace_id: $w, insert_index: $i}')"
-  resp="$(herdr_socket workspace.move "$params")" || return 1
-  [[ -n "$resp" ]] || return 1
-  jq -e '.error == null' >/dev/null 2>&1 <<<"$resp"
-}
-
-# Gather the given ids into one contiguous run, in the order given, without
-# moving the group as a whole: the run is anchored where its topmost member
-# already sits. Returns 0 only when the sidebar was actually changed.
-set_sidebar_order() {
-  local -a want=() current=() ids=() sim=() next=()
-  local id i j seen=" " moved=0 start=-1 target at
-
-  for id in "$@"; do
-    [[ -n "$id" ]] || continue
-    [[ "$seen" == *" $id "* ]] && continue
-    seen+="$id "
-    want+=("$id")
-  done
-  (( ${#want[@]} >= 2 )) || return 1
-
-  mapfile -t current < <(sidebar_ids)
-  (( ${#current[@]} > 0 )) || return 1
-
-  # Drop ids herdr does not know about - a row closed by hand since the last
-  # refresh would otherwise poison the whole call.
-  local haystack=" ${current[*]} "
-  for id in "${want[@]}"; do
-    [[ "$haystack" == *" $id "* ]] && ids+=("$id")
-  done
-  (( ${#ids[@]} >= 2 )) || return 1
-
-  # The run is anchored at the topmost member's current slot, so gathering the
-  # group never slides the whole block up or down the sidebar.
-  local group=" ${ids[*]} "
-  for i in "${!current[@]}"; do
-    if [[ "$group" == *" ${current[$i]} "* ]]; then start="$i"; break; fi
-  done
-  (( start >= 0 )) || return 1
-
-  # Already contiguous and already in this order? Then leave the sidebar alone
-  # rather than emitting a reorder event every single run.
-  local same=1
-  for i in "${!ids[@]}"; do
-    if (( start + i >= ${#current[@]} )) || [[ "${current[$((start + i))]}" != "${ids[$i]}" ]]; then
-      same=0; break
-    fi
-  done
-  if (( same )); then return 1; fi
-
-  # Place the members one at a time, simulating the resulting list as we go so
-  # the next index is right without another round trip per move.
-  sim=("${current[@]}")
-  for i in "${!ids[@]}"; do
-    target=$((start + i))
-    at=-1
-    for j in "${!sim[@]}"; do
-      if [[ "${sim[$j]}" == "${ids[$i]}" ]]; then at="$j"; break; fi
-    done
-    (( at >= 0 )) || continue
-    (( at == target )) && continue
-    move_workspace "${ids[$i]}" "$target" || return 1
-    moved=1
-    next=()
-    for j in "${!sim[@]}"; do
-      (( j == at )) && continue
-      next+=("${sim[$j]}")
-    done
-    sim=("${next[@]:0:target}" "${ids[$i]}" "${next[@]:target}")
-  done
-
-  (( moved )) || return 1
-  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -451,45 +215,77 @@ pane_id_by_tab() {
     | head -n1
 }
 
-# Wait briefly for a pane's shell to come up, then report whether the pane is
-# idle (foreground process is just the shell). Non-idle means something already
-# started there, so we must not submit a second command on top of it.
+# Wait until the pane's foreground is a settled shell (only shell process names
+# for two consecutive polls). A brand-new pane runs profile hooks (manpath,
+# etc.) that briefly look "busy"; treating the first non-shell as permanent
+# busy is what skipped every create-time start of micro/claude/agent.
+# Returns 0 when idle-shell, 1 when a durable app is already running (or timeout).
 pane_ready_and_idle() {
-  local pane="$1" deadline=$((SECONDS + 5)) names="" n
+  local pane="$1" deadline=$((SECONDS + 20)) names="" n only_shell durable stable=0
   while (( SECONDS < deadline )); do
     names="$(herdr_json pane process-info --pane "$pane" 2>/dev/null \
              | jq -r '.result.process_info.foreground_processes[]?.name' || true)"
-    [[ -n "$names" ]] && break
-    sleep 0.2
+    if [[ -z "$names" ]]; then
+      stable=0
+      sleep 0.25
+      continue
+    fi
+
+    only_shell=1
+    durable=0
+    while read -r n; do
+      case "$n" in
+        ""|bash|sh|dash|zsh|fish|"-bash"|"-sh"|"-zsh") ;;
+        micro|nvim|vim|vi|emacs|claude|agent|cursor-agent|MainThread|node)
+          durable=1; only_shell=0; break ;;
+        *) only_shell=0 ;;
+      esac
+    done <<<"$names"
+
+    if (( durable )); then
+      return 1
+    fi
+    if (( only_shell )); then
+      stable=$((stable + 1))
+      (( stable >= 2 )) && return 0
+    else
+      # Transient profile noise (manpath, …) — keep waiting.
+      stable=0
+    fi
+    sleep 0.25
   done
-  [[ -n "$names" ]] || return 0        # cannot tell - assume idle and submit
-  while read -r n; do
-    case "$n" in ""|bash|sh|dash|zsh|fish|"-bash"|"-sh"|"-zsh") ;; *) return 1 ;; esac
-  done <<<"$names"
-  return 0
+  return 1
 }
 
 # Submit a command into a tab's pane, cd'd to the directory first so it runs
 # there regardless of where the pane started.
+# Returns 0 when the command was submitted, 1 when the pane was busy or missing.
 run_in_tab() {
   local ws="$1" tab="$2" dir="$3" cmd="$4" pane
   pane="$(pane_id_by_tab "$ws" "$tab")"
   [[ -n "$pane" ]] || { echo "WARNING: no pane found for tab ${tab}" >&2; return 1; }
   if ! pane_ready_and_idle "$pane"; then
     echo "-> tab ${tab}: pane busy, left as-is"
-    return 0
+    return 1
   fi
-  herdr_quiet pane run "$pane" "cd $(printf '%q' "$dir") && ${cmd}"
+  # Do not swallow pane-run failures — a silent fail is how empty tabs ship.
+  if ! herdr pane run "$pane" "cd $(printf '%q' "$dir") && ${cmd}" >/dev/null; then
+    echo "WARNING: herdr pane run failed for tab ${tab} (${pane})" >&2
+    return 1
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------
-# Notes files
+# Notes / repo list files
 #
-# Per-repo notes file: <STORY_DIR>/<id>-<slug>-<repo>.txt - inside the story
-# folder, next to the repo worktrees but never inside one, so it cannot dirty a
-# repo. The sidecar ".notespath-<repo>" is kept so herdr's own worktree
-# auto-layout (which reads "../.notespath-<repo>") still works if the worktree is
-# later opened through herdr's worktree UI.
+# Story list: <STORY_DIR>/repos.txt - one related repo name per line. The story
+# workspace's notes tab opens this in micro.
+#
+# Per-repo notes file: <STORY_DIR>/<id>-<slug>-<repo>.txt - next to the repo
+# worktrees but never inside one. The sidecar ".notespath-<repo>" is kept so
+# herdr's own worktree auto-layout still works if a checkout is opened through
+# herdr's worktree UI.
 # ---------------------------------------------------------------------------
 repo_notes_path() { printf '%s\n' "${STORY_DIR}/${ID}-${SLUG}-${1}.txt"; }
 
@@ -500,16 +296,19 @@ write_repo_notes() {
   echo "-> notes:  $notes"
 }
 
-# The notes file the story's notes tab opens: the first repo that was asked for,
-# falling back to the first one that actually ended up with a notes file (the
-# first repo may have failed).
-story_notes_path() {
-  local repo p
-  for repo in "${REPO_ORDER[@]}"; do
-    p="$(repo_notes_path "$repo")"
-    [[ -e "$p" ]] && { printf '%s\n' "$p"; return 0; }
-  done
-  if (( ${#REPO_ORDER[@]} > 0 )); then repo_notes_path "${REPO_ORDER[0]}"; fi
+story_repos_path() { printf '%s\n' "${STORY_DIR}/repos.txt"; }
+
+# Rewrite repos.txt from the story's related repos (always, so re-runs stay in sync).
+write_story_repos_file() {
+  local path; path="$(story_repos_path)"
+  local -a repos=()
+  mapfile -t repos < <(story_repos)
+  if (( ${#repos[@]} > 0 )); then
+    printf '%s\n' "${repos[@]}" > "$path"
+  else
+    : > "$path"
+  fi
+  echo "-> repos:  $path (${#repos[@]} line(s))"
 }
 
 # ---------------------------------------------------------------------------
@@ -526,41 +325,6 @@ path_key() {
   while [[ "$p" == *"//"* ]]; do p="${p//\/\//\/}"; done
   [[ "$p" == "/" ]] || p="${p%/}"
   printf '%s\n' "$p"
-}
-
-# Does the sidebar actually draw the $tree token?
-#
-# It is opt-in: herdr renders a space row from [ui.sidebar.spaces].rows, whose
-# default is [["state_icon", "workspace"]] - state_icon first, so every bullet
-# sits hard against the left edge and no connector is drawn at all. Only a row
-# spec that puts $tree BEFORE state_icon draws the tree.
-#
-# install.sh never rewrites config.toml, so the script has to cope with both:
-# with $tree the repo label is the bare repo name and the token supplies the
-# drawing; without it the label carries a plain indent instead.
-tree_token_configured() {
-  local cfg; cfg="$(herdr_config_path)"
-  [[ -f "$cfg" ]] || return 1
-  awk '
-    /^[[:space:]]*\[ui\.sidebar\.spaces\]/ { in_section = 1; next }
-    /^[[:space:]]*\[/                      { in_section = 0; next }
-    !in_section                            { next }
-    /^[[:space:]]*#/                       { next }   # a commented sample does not count
-    /\$tree/                               { found = 1; exit }
-    END                                    { exit(found ? 0 : 1) }
-  ' "$cfg"
-}
-
-# Display-only sidebar token. Never fatal: a herdr that does not take it just
-# leaves the row looking the way it does today.
-set_tree_token() {
-  local ws="$1" value="$2"
-  [[ -n "$ws" ]] || return 0
-  if [[ -n "$value" ]]; then
-    herdr_quiet workspace report-metadata "$ws" --source worktree-make --token "tree=${value}"
-  else
-    herdr_quiet workspace report-metadata "$ws" --source worktree-make --clear-token tree
-  fi
 }
 
 # The identity inside a label, with any tree drawing or indent stripped off the
@@ -649,16 +413,16 @@ story_repos() {
 # Cosmetic relative to the worktrees themselves: every failure warns and carries
 # on, because the checkouts on disk are already correct and usable either way.
 #
-# Commands are only ever submitted into tabs THIS CALL created. pane_ready_and_idle
-# is not enough on its own: herdr reports claude in a busy pane but reports only
-# the shell for a pane sitting in micro, so a re-run that trusted the probe would
-# type "micro <path>" straight into the open notes buffer.
+# Start each tab's command when its pane is still an idle shell. herdr-plus
+# layout often creates notes/claude/cursor/bash without starting them; a re-run
+# must fill those. pane_ready_and_idle refuses a pane that already has micro,
+# claude, or agent in the foreground, so an open editor or agent is never typed
+# into.
 NEW_WS=""
 init_workspace() {
   local dir="$1" label="$2" bare_name="$3"
   local -n _wstabs="$4"
   local -n _wscmds="$5"
-  local -A fresh=()
   local -A tabs=()
   local ws created root_tab name id t json
   local -a started=() kept=()
@@ -684,7 +448,6 @@ init_workspace() {
     root_tab="$(jq -r '.result.tab.tab_id // empty' <<<"$created")"
     if [[ -n "$root_tab" && ${#_wstabs[@]} -gt 0 ]]; then
       herdr_quiet tab rename "$root_tab" "${_wstabs[0]}"
-      fresh["${_wstabs[0]}"]=1
     fi
     echo "-> herdr:  workspace $ws created ($label) at $dir"
   fi
@@ -704,123 +467,119 @@ init_workspace() {
     [[ -n "$t" ]] && id="$(jq -r '.result.tab.tab_id // empty' <<<"$t")"
     if [[ -n "$id" ]]; then
       tabs["$name"]="$id"
-      fresh["$name"]=1
     else
       echo "WARNING: could not create the '${name}' tab in workspace ${ws}" >&2
     fi
   done
 
   for name in "${_wstabs[@]}"; do
-    [[ -n "${fresh[$name]:-}" && -n "${tabs[$name]:-}" ]] || continue
+    [[ -n "${tabs[$name]:-}" ]] || continue
     [[ -n "${_wscmds[$name]:-}" ]] || continue
-    run_in_tab "$ws" "${tabs[$name]}" "$dir" "${_wscmds[$name]}" || true
+    if run_in_tab "$ws" "${tabs[$name]}" "$dir" "${_wscmds[$name]}"; then
+      started+=("$name")
+    else
+      kept+=("$name")
+    fi
   done
 
-  for name in "${_wstabs[@]}"; do
-    if [[ -n "${fresh[$name]:-}" ]]; then started+=("$name"); else kept+=("$name"); fi
-  done
   echo "-> tabs:   $(join_commas "${_wstabs[@]}")"
-  if (( ${#started[@]} )); then echo "           started: $(join_commas "${started[@]}")"; fi
-  if (( ${#kept[@]} ));    then echo "           left as they were: $(join_commas "${kept[@]}")"; fi
+  if (( ${#started[@]} )); then echo "           started (idle panes): $(join_commas "${started[@]}")"; fi
+  if (( ${#kept[@]} ));    then echo "           left as they were (busy or missing): $(join_commas "${kept[@]}")"; fi
 
   NEW_WS="$ws"
   return 0
 }
 
-# The story row, then one row per repo drawn beneath it as its children.
-#
-#     {id}-{slug}          story workspace, cwd = story folder
-#     |- repo1             repo workspace,  cwd = story/repo1
-#     `- repo2
-#
-# herdr has NO parent/child nesting: its sidebar is a flat list of spaces (only
-# worktree workspaces get grouped, and then always under their clone - the very
-# thing this replaced). Two things stand in for it:
-#
-#   * the connector, reported as each repo row's $tree token so it renders to the
-#     LEFT of the state icon and the bullet indents with the tree. Indenting the
-#     label alone cannot do that - the bullet comes from state_icon, the first
-#     thing in the row - which is why $CHILD_LABEL_PREFIX is only the fallback
-#     for a config.toml that does not lay the row out that way. herdr also draws
-#     its own " . " between segments, which no setting suppresses; that dot is
-#     accepted deliberately, see the $TREE_BRANCH block.
-#   * adjacency, maintained explicitly through set_sidebar_order - a repo added
-#     to an existing story is created last and would otherwise sit at the bottom
-#     of the sidebar rather than under its story.
+# One story workspace at the story folder. Repo checkouts are subfolders only.
 init_story_workspace() {
-  local notes notes_name story_name ws dir repo_notes connector label rws claude_cmd
-  local -a repos=() ordered=()
-  local -A story_cmds=() repo_cmds=()
-  local i tree=0
+  local notes story_name ws claude_cmd
+  local -A story_cmds=()
 
+  write_story_repos_file
+  notes="$(story_repos_path)"
   claude_cmd="${WT_CLAUDE_CMD:-$CLAUDE_CMD}"
-  notes="$(story_notes_path)"
   story_cmds[claude]="$claude_cmd"
   story_cmds[cursor]="$CURSOR_CMD"
-  if [[ -n "$notes" ]]; then
-    story_cmds[notes]="micro $(printf '%q' "$notes")"
-    notes_name="$(basename "$notes")"
-  else
-    notes_name="none"
-  fi
-  echo "-> story:  workspace tabs at the story root (notes -> ${notes_name})"
+  story_cmds[notes]="micro $(printf '%q' "$notes")"
+  echo "-> story:  workspace tabs at the story root (notes -> $(basename "$notes"))"
 
   story_name="${ID}-${SLUG}"
   init_workspace "$STORY_DIR" "$story_name" "$story_name" STORY_TABS story_cmds
   ws="$NEW_WS"
   [[ -n "$ws" ]] || return 0
-  # The story row is the trunk: no connector. An absent token renders as nothing -
-  # no segment, so no separator dot either - the same way $jj_status does on a
-  # workspace that is not a jj repo.
-  set_tree_token "$ws" ''
-
-  # The story row leads; each repo row follows in the order the story lists them.
-  ordered=("$ws")
-
-  tree_token_configured && tree=1
-  mapfile -t repos < <(story_repos)
-  for i in "${!repos[@]}"; do
-    repo="${repos[$i]}"
-    dir="${STORY_DIR}/${repo}"
-    repo_notes="$(repo_notes_path "$repo")"
-    repo_cmds=([claude]="$claude_cmd")
-    if [[ -e "$repo_notes" ]]; then
-      repo_cmds[notes]="micro $(printf '%q' "$repo_notes")"
-    fi
-    # Connectors are re-reported every run, so the repo that used to be last gives
-    # up its corner when a new one is added after it.
-    if (( i == ${#repos[@]} - 1 )); then connector="$TREE_LAST"; else connector="$TREE_BRANCH"; fi
-    if (( tree )); then label="$repo"; else label="${CHILD_LABEL_PREFIX}${repo}"; fi
-    echo "-> repo:   $repo"
-    init_workspace "$dir" "$label" "$repo" REPO_TABS repo_cmds
-    rws="$NEW_WS"
-    set_tree_token "$rws" "${TREE_INDENT}${connector}"
-    [[ -n "$rws" ]] && ordered+=("$rws")
-  done
-
-  # A repo added to a story that already exists is created last, so herdr parks
-  # it at the bottom of the sidebar instead of under its story. Pull the story's
-  # rows back into one run. The connectors above are drawn from $repos, not from
-  # sidebar position, so they are already right either way - this only fixes
-  # where the rows physically sit.
-  if set_sidebar_order "${ordered[@]}"; then
-    echo ''
-    echo '-> sidebar: pulled the story rows back together'
-  fi
-
-  if (( ! tree )) && (( ${#repos[@]} > 0 )); then
-    echo ''
-    echo 'NOTE: the repo rows are indented by their label, so their bullets still sit'
-    echo '      hard left and no connectors are drawn. To draw the tree, add this to'
-    echo "      $(herdr_config_path) and run 'herdr server reload-config':"
-    echo ''
-    echo '        [ui.sidebar.spaces]'
-    echo '        rows = [["$tree", "state_icon", "workspace"]]'
-    echo ''
-  fi
 }
 
 ask() { gum input --prompt "$1 > " --placeholder "$2"; }
+
+# Clone folder names under SRC_ROOT for the interactive picker: preferred repos
+# first (when present), then the rest A–Z. Only directories with a .git entry.
+list_clone_repos() {
+  local name
+  local -a preferred=() rest=()
+  local -A pin=()
+  for name in "${PREFERRED_REPOS[@]}"; do
+    pin["$name"]=1
+    [[ -e "${SRC_ROOT}/${name}/.git" ]] && preferred+=("$name")
+  done
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    [[ -n "${pin[$name]:-}" ]] && continue
+    [[ -e "${SRC_ROOT}/${name}/.git" ]] || continue
+    rest+=("$name")
+  done < <(find "$SRC_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | LC_ALL=C sort)
+  printf '%s\n' "${preferred[@]:-}" "${rest[@]:-}"
+}
+
+# Multi-select repos from SRC_ROOT. Prints a csv on stdout. Pre-selects
+# FCTG_Monorepo when it exists. Esc / empty selection fails.
+#
+# gum choose sorts options alphabetically, which would bury the preferred
+# repos. Prefix each label with a zero-padded index so that sort keeps our
+# list order; strip the prefix from the selection before returning.
+pick_repos() {
+  local -a names=() labels=() selected=() out=()
+  local height i name label o
+  mapfile -t names < <(list_clone_repos)
+  local -a clean=()
+  for o in "${names[@]}"; do [[ -n "$o" ]] && clean+=("$o"); done
+  names=("${clean[@]}")
+  (( ${#names[@]} > 0 )) || {
+    echo "no git clones under ${SRC_ROOT}" >&2
+    return 1
+  }
+  for i in "${!names[@]}"; do
+    labels+=("$(printf '%02d %s' "$((i + 1))" "${names[$i]}")")
+  done
+  height=${#labels[@]}
+  (( height > 15 )) && height=15
+  (( height < 3 )) && height=3
+  local -a sel_flag=()
+  for label in "${labels[@]}"; do
+    if [[ "$label" == *" FCTG_Monorepo" ]]; then
+      sel_flag=(--selected="$label")
+      break
+    fi
+  done
+  mapfile -t selected < <(
+    gum choose --no-limit --ordered \
+      --header "Repos under ${SRC_ROOT} (space toggle, enter confirm)" \
+      --height "$height" \
+      "${sel_flag[@]}" \
+      "${labels[@]}"
+  ) || return 1
+  for o in "${selected[@]}"; do
+    [[ -n "$o" ]] || continue
+    # "01 FCTG_Monorepo" -> "FCTG_Monorepo"
+    name="${o#* }"
+    [[ -n "$name" ]] && out+=("$name")
+  done
+  (( ${#out[@]} > 0 )) || {
+    echo "repos required" >&2
+    return 1
+  }
+  local IFS=,
+  printf '%s\n' "${out[*]}"
+}
 
 # A repo-level problem. Fatal when a human is driving (they asked for exactly
 # these repos); counted and reported in non-interactive mode so one bad repo
@@ -1164,8 +923,8 @@ if [[ "$TYPE" == "development" ]]; then
     REPOS="${WT_REPOS:-}"
     [[ -n "$REPOS" ]] || { echo "WT_REPOS required in non-interactive mode" >&2; exit 1; }
   else
-    REPOS="$(ask 'Repos (csv)' 'repo-a,repo-b,repo-c')"
-    [[ -n "$REPOS" ]] || { echo "repos required" >&2; exit 1; }
+    REPOS="$(pick_repos)" || exit 1
+    echo "-> repos:  ${REPOS}"
   fi
 
   # ----- AZURE PLACEHOLDER (development) -----------------------------------

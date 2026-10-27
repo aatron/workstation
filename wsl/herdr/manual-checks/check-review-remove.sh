@@ -333,7 +333,7 @@ check 'the review is gone' "$([[ -e "$REVIEW_ROOT/24004" ]] && echo 1 || echo 0)
 
 # ---------------------------------------------------------------------------
 echo
-echo '6. notes: content archived, empty not, --discard-notes opts out'
+echo '6. notes stay in the review folder and are deleted with it (no _notes archive)'
 reset_fixture
 new_repo_with_pr 'repo_n' 'feature/x/24005-n'
 write_work_item 24005 "vstfs:///Git/PullRequestId/p%2Fr%2F8030"
@@ -341,29 +341,15 @@ write_pr 8030 'repo_n' 'ann.b' 'feature/x/24005-n' "$BRANCH_TIP" "$BASE_TIP" com
 run_make 24005
 echo 'my findings' > "$REVIEW_ROOT/24005/review-24005-notes.txt"
 : > "$REVIEW_ROOT/24005/review-24005-ann.b-repo_n-notes.txt"
+check 'notes live under the review folder before remove' \
+  "$([[ -f "$REVIEW_ROOT/24005/review-24005-notes.txt" ]] && echo 0 || echo 1)" 'missing'
 run_remove 24005
 check 'exit 0' "$(ok "$RC" 0)" "rc=$RC
 $OUT"
-check 'the notes with content were archived' \
-  "$(yes grep -qF 'my findings' "$REVIEW_ROOT/_notes/review-24005-notes.txt")" \
-  "archive: $(ls "$REVIEW_ROOT/_notes" 2>/dev/null | tr '\n' ' ')"
-check 'the empty notes file was not archived' \
-  "$([[ -e "$REVIEW_ROOT/_notes/review-24005-ann.b-repo_n-notes.txt" ]] && echo 1 || echo 0)" \
-  'archived an empty file'
-
-echo
-echo '6b. --discard-notes deletes them instead'
-reset_fixture
-new_repo_with_pr 'repo_m' 'feature/x/24006-m'
-write_work_item 24006 "vstfs:///Git/PullRequestId/p%2Fr%2F8040"
-write_pr 8040 'repo_m' 'ann.b' 'feature/x/24006-m' "$BRANCH_TIP" "$BASE_TIP" completed
-run_make 24006
-echo 'throwaway' > "$REVIEW_ROOT/24006/review-24006-notes.txt"
-run_remove 24006 --discard-notes
-check 'exit 0' "$(ok "$RC" 0)" "rc=$RC
-$OUT"
-check 'nothing was archived' "$([[ -e "$REVIEW_ROOT/_notes" ]] && echo 1 || echo 0)" 'archive created anyway'
-check 'said it discarded them' "$(yes grep -qF 'discarding notes' <<<"$OUT")" "$OUT"
+check 'the review folder is gone (notes with it)' \
+  "$([[ -e "$REVIEW_ROOT/24005" ]] && echo 1 || echo 0)" 'still there'
+check 'no _notes archive was created' \
+  "$([[ -e "$REVIEW_ROOT/_notes" ]] && echo 1 || echo 0)" 'archive exists'
 
 # ---------------------------------------------------------------------------
 echo

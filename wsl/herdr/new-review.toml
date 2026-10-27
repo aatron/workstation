@@ -5,7 +5,7 @@
 #
 # Read only: creates detached worktrees for the item's PRs locally and writes
 # nothing back to Azure DevOps. See review-make.sh.
-name = "New Code Review"
+name = "Review - Create"
 description = "Review every PR on an Azure DevOps work item, locally and read-only"
 type = "form"
 command = '"$HOME/bin/worktree-launch.sh" new-review {{.WorkspaceId}} "{{.WorkDir}}" "{{.Value}}"'

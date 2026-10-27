@@ -12,13 +12,20 @@
 #      worktree-launch.sh -> ~/bin/worktree-launch.sh,
 #      worktree-remove.sh -> ~/bin/worktree-remove.sh,
 #      review-make.sh -> ~/bin/review-make.sh,
+#      review-post-comments.sh -> ~/bin/review-post-comments.sh,
+#      review-wait-ready.sh -> ~/bin/review-wait-ready.sh,
+#      review-wait-findings.sh -> ~/bin/review-wait-findings.sh,
+#      review-pipeline.sh -> ~/bin/review-pipeline.sh,
+#      review-goose-panes.sh -> ~/bin/review-goose-panes.sh,
+#      review-goose.yaml -> ~/bin/review-goose.yaml,
 #      review-remove.sh -> ~/bin/review-remove.sh,
 #      story-reap.sh -> ~/bin/story-reap.sh,
 #      story-make.sh -> ~/bin/story-make.sh, and
 #      az-watcher/az-watcher.sh -> ~/bin/az-watcher
-#   6. Installs quick-action TOMLs (dev + delete + new-review + remove-review +
-#      reap + az-sync) into herdr-plus, and deletes retired ones
+#   6. Installs quick-action TOMLs (dev + delete + new-review + new-review-goose +
+#      remove-review + reap + az-sync) into herdr-plus, and deletes retired ones
 #   7. Installs the wildcard worktree auto-layout (repo = "*")
+#   8. Installs Block Goose CLI (telemetry off) for the Goose review recipe
 #
 # The symlinks mean the working copy IS what runs: edit a script here and the
 # next quick action picks the change up with no re-install.
@@ -34,6 +41,12 @@ TARGET_SCRIPT="${BIN_DIR}/make-worktree.sh"
 TARGET_LAUNCH="${BIN_DIR}/worktree-launch.sh"
 TARGET_REMOVE="${BIN_DIR}/worktree-remove.sh"
 TARGET_REVIEW_MAKE="${BIN_DIR}/review-make.sh"
+TARGET_REVIEW_POST="${BIN_DIR}/review-post-comments.sh"
+TARGET_REVIEW_WAIT_READY="${BIN_DIR}/review-wait-ready.sh"
+TARGET_REVIEW_WAIT="${BIN_DIR}/review-wait-findings.sh"
+TARGET_REVIEW_PIPELINE="${BIN_DIR}/review-pipeline.sh"
+TARGET_REVIEW_GOOSE_PANES="${BIN_DIR}/review-goose-panes.sh"
+TARGET_REVIEW_GOOSE_RECIPE="${BIN_DIR}/review-goose.yaml"
 TARGET_REVIEW_REMOVE="${BIN_DIR}/review-remove.sh"
 TARGET_STORY_REAP="${BIN_DIR}/story-reap.sh"
 TARGET_STORY_MAKE="${BIN_DIR}/story-make.sh"
@@ -54,6 +67,17 @@ ensure_path_dirs() {
       echo "$line"
     } >> "$rc"
     echo "-> PATH: appended ~/bin and ~/.local/bin to ${rc}"
+  fi
+  # OpenSSL SSL_CERT_DIR must be one directory. A PATH-style value
+  # (e.g. aspnet trust:system certs) breaks Cursor Agent with
+  # "Cannot open directory …". NODE_EXTRA_CA_CERTS still adds local PEMs.
+  if [[ -f "$rc" ]] && ! grep -qF 'SSL_CERT_DIR:-}' "$rc" 2>/dev/null; then
+    {
+      echo ""
+      echo "# OpenSSL: drop PATH-style SSL_CERT_DIR (wsl/herdr/install.sh)"
+      echo 'if [[ "${SSL_CERT_DIR:-}" == *:* ]]; then unset SSL_CERT_DIR; fi'
+    } >> "$rc"
+    echo "-> SSL:   appended SSL_CERT_DIR guard to ${rc}"
   fi
 }
 
@@ -153,19 +177,35 @@ ensure_gum() {
 }
 
 ensure_claude() {
-  if have claude; then
-    echo "-> claude: $(command -v claude)"
-    return
+  local claude_bin rc line
+  if ! have claude; then
+    echo "-> claude: installing (Claude Code CLI)"
+    curl -fsSL https://claude.ai/install.sh | bash
+    hash -r 2>/dev/null || true
+    export PATH="${BIN_DIR}:${LOCAL_BIN}:${PATH}"
+    have claude || {
+      echo "claude install finished but 'claude' is not on PATH (open a new shell or check ~/.local/bin)" >&2
+      exit 1
+    }
   fi
-  echo "-> claude: installing (Claude Code CLI)"
-  curl -fsSL https://claude.ai/install.sh | bash
-  hash -r 2>/dev/null || true
-  export PATH="${BIN_DIR}:${LOCAL_BIN}:${PATH}"
-  have claude || {
-    echo "claude install finished but 'claude' is not on PATH (open a new shell or check ~/.local/bin)" >&2
-    exit 1
-  }
-  echo "-> claude: $(command -v claude)"
+  claude_bin="$(command -v claude)"
+  # Goose Claude ACP / agent-sdk looks for a native binary; point it at Claude Code.
+  export CLAUDE_CODE_EXECUTABLE="$claude_bin"
+  line="export CLAUDE_CODE_EXECUTABLE=\"${claude_bin}\""
+  rc="${HOME}/.bashrc"
+  if [[ -f "$rc" ]]; then
+    if grep -qF 'CLAUDE_CODE_EXECUTABLE=' "$rc" 2>/dev/null; then
+      sed -i -E "s|^[[:space:]]*export[[:space:]]+CLAUDE_CODE_EXECUTABLE=.*$|${line}|" "$rc"
+    else
+      {
+        echo ""
+        echo "# Claude Code path for Goose ACP / agent-sdk (wsl/herdr/install.sh)"
+        echo "$line"
+      } >> "$rc"
+    fi
+  fi
+  echo "-> claude: ${claude_bin}"
+  echo "-> claude: CLAUDE_CODE_EXECUTABLE=${claude_bin}"
 }
 
 ensure_agent() {
@@ -182,6 +222,55 @@ ensure_agent() {
     exit 1
   }
   echo "-> agent: $(command -v agent)"
+}
+
+# Block Goose CLI. Telemetry off at install and in shell config.
+# Official: https://github.com/block/goose (aaif-goose releases)
+ensure_goose() {
+  local line rc cfg
+  export GOOSE_TELEMETRY_ENABLED=false
+  export GOOSE_TELEMETRY_OFF=1
+
+  line='export GOOSE_TELEMETRY_ENABLED=false GOOSE_TELEMETRY_OFF=1'
+  rc="${HOME}/.bashrc"
+  if [[ -f "$rc" ]] && ! grep -qF 'GOOSE_TELEMETRY_ENABLED=false' "$rc" 2>/dev/null; then
+    {
+      echo ""
+      echo "# Block Goose — telemetry off (wsl/herdr/install.sh)"
+      echo "$line"
+    } >> "$rc"
+    echo "-> goose: appended telemetry-off exports to ${rc}"
+  fi
+
+  mkdir -p "${HOME}/.config/goose"
+  cfg="${HOME}/.config/goose/config.yaml"
+  if [[ -f "$cfg" ]]; then
+    if grep -qE '^[[:space:]]*GOOSE_TELEMETRY_ENABLED[[:space:]]*:' "$cfg" 2>/dev/null; then
+      sed -i -E 's/^([[:space:]]*GOOSE_TELEMETRY_ENABLED[[:space:]]*:).*/\1 false/' "$cfg"
+    else
+      printf '\nGOOSE_TELEMETRY_ENABLED: false\n' >> "$cfg"
+    fi
+  else
+    printf 'GOOSE_TELEMETRY_ENABLED: false\n' > "$cfg"
+  fi
+  echo "-> goose: telemetry disabled in ${cfg}"
+
+  if have goose; then
+    echo "-> goose: $(command -v goose) ($(goose --version 2>/dev/null | head -1 || echo installed))"
+    return
+  fi
+  echo "-> goose: installing (Block Goose CLI; CONFIGURE=false, telemetry off)"
+  # CONFIGURE=false skips interactive goose configure (provider setup is manual).
+  curl -fsSL https://github.com/block/goose/raw/main/download_cli.sh \
+    | CONFIGURE=false GOOSE_TELEMETRY_ENABLED=false GOOSE_TELEMETRY_OFF=1 bash
+  hash -r 2>/dev/null || true
+  export PATH="${BIN_DIR}:${LOCAL_BIN}:${PATH}"
+  have goose || {
+    echo "goose install finished but 'goose' is not on PATH (open a new shell or check ~/.local/bin)" >&2
+    exit 1
+  }
+  echo "-> goose: $(command -v goose)"
+  echo "   run 'goose configure' once to pick a provider (needed for goose run --recipe)"
 }
 
 # --- plugins (idempotent; does not touch root Herdr config.toml) -----------
@@ -270,7 +359,7 @@ fix_example_openers() {
     [[ -f "$f" ]] || continue
     case "$(basename "$f")" in
       new-worktree-*.toml|remove-worktree.toml|az-watcher.toml) continue ;;
-      new-review.toml|remove-review.toml|reap-stories.toml) continue ;;
+      new-review.toml|new-review-goose.toml|remove-review.toml|reap-stories.toml) continue ;;
     esac
     if grep -qE 'command = "open ' "$f"; then
       sed -i 's/command = "open /command = "{{opener}} /g' "$f"
@@ -288,6 +377,7 @@ ensure_herdr_config
 ensure_gum
 ensure_claude
 ensure_agent
+ensure_goose
 
 echo
 echo "=== 2/3 Herdr plugins ==="
@@ -313,6 +403,11 @@ normalize_shell_script "${SCRIPT_DIR}/worktree-make.sh"
 normalize_shell_script "${SCRIPT_DIR}/worktree-launch.sh"
 normalize_shell_script "${SCRIPT_DIR}/worktree-remove.sh"
 normalize_shell_script "${SCRIPT_DIR}/review-make.sh"
+normalize_shell_script "${SCRIPT_DIR}/review-post-comments.sh"
+normalize_shell_script "${SCRIPT_DIR}/review-wait-ready.sh"
+normalize_shell_script "${SCRIPT_DIR}/review-wait-findings.sh"
+normalize_shell_script "${SCRIPT_DIR}/review-pipeline.sh"
+normalize_shell_script "${SCRIPT_DIR}/review-goose-panes.sh"
 normalize_shell_script "${SCRIPT_DIR}/review-remove.sh"
 normalize_shell_script "${SCRIPT_DIR}/story-reap.sh"
 normalize_shell_script "${SCRIPT_DIR}/story-make.sh"
@@ -329,6 +424,30 @@ echo "-> remove:  ${TARGET_REMOVE} -> ${SCRIPT_DIR}/worktree-remove.sh"
 ln -sfn "${SCRIPT_DIR}/review-make.sh" "$TARGET_REVIEW_MAKE"
 echo "-> review:  ${TARGET_REVIEW_MAKE} -> ${SCRIPT_DIR}/review-make.sh"
 
+ln -sfn "${SCRIPT_DIR}/review-post-comments.sh" "$TARGET_REVIEW_POST"
+echo "-> post:    ${TARGET_REVIEW_POST} -> ${SCRIPT_DIR}/review-post-comments.sh"
+
+ln -sfn "${SCRIPT_DIR}/review-wait-ready.sh" "$TARGET_REVIEW_WAIT_READY"
+echo "-> ready:   ${TARGET_REVIEW_WAIT_READY} -> ${SCRIPT_DIR}/review-wait-ready.sh"
+
+ln -sfn "${SCRIPT_DIR}/review-wait-findings.sh" "$TARGET_REVIEW_WAIT"
+echo "-> wait:    ${TARGET_REVIEW_WAIT} -> ${SCRIPT_DIR}/review-wait-findings.sh"
+
+ln -sfn "${SCRIPT_DIR}/review-pipeline.sh" "$TARGET_REVIEW_PIPELINE"
+echo "-> pipe:    ${TARGET_REVIEW_PIPELINE} -> ${SCRIPT_DIR}/review-pipeline.sh"
+
+ln -sfn "${SCRIPT_DIR}/review-goose-panes.sh" "$TARGET_REVIEW_GOOSE_PANES"
+echo "-> panes:   ${TARGET_REVIEW_GOOSE_PANES} -> ${SCRIPT_DIR}/review-goose-panes.sh"
+
+ln -sfn "${SCRIPT_DIR}/review-goose.yaml" "$TARGET_REVIEW_GOOSE_RECIPE"
+echo "-> recipe:  ${TARGET_REVIEW_GOOSE_RECIPE} -> ${SCRIPT_DIR}/review-goose.yaml"
+
+# Retired: Goose orchestration moved into review-goose.yaml (goose run --recipe).
+if [[ -e "${BIN_DIR}/review-pipeline-goose.sh" || -L "${BIN_DIR}/review-pipeline-goose.sh" ]]; then
+  rm -f "${BIN_DIR}/review-pipeline-goose.sh"
+  echo "-> removed: ${BIN_DIR}/review-pipeline-goose.sh (retired; use review-goose.yaml)"
+fi
+
 ln -sfn "${SCRIPT_DIR}/review-remove.sh" "$TARGET_REVIEW_REMOVE"
 echo "-> cleanup: ${TARGET_REVIEW_REMOVE} -> ${SCRIPT_DIR}/review-remove.sh"
 
@@ -344,6 +463,7 @@ echo "-> az:      ${TARGET_AZ_WATCHER} -> ${SCRIPT_DIR}/az-watcher/az-watcher.sh
 install_file "${SCRIPT_DIR}/new-worktree-dev.toml"         "${QA_DIR}/new-worktree-dev.toml"
 install_file "${SCRIPT_DIR}/remove-worktree.toml"          "${QA_DIR}/remove-worktree.toml"
 install_file "${SCRIPT_DIR}/new-review.toml"               "${QA_DIR}/new-review.toml"
+install_file "${SCRIPT_DIR}/new-review-goose.toml"         "${QA_DIR}/new-review-goose.toml"
 install_file "${SCRIPT_DIR}/remove-review.toml"            "${QA_DIR}/remove-review.toml"
 install_file "${SCRIPT_DIR}/reap-stories.toml"             "${QA_DIR}/reap-stories.toml"
 install_file "${SCRIPT_DIR}/az-watcher.toml"              "${QA_DIR}/az-watcher.toml"
@@ -419,7 +539,8 @@ echo "         az devops configure -d organization=https://dev.azure.com/<org> p
 echo "       verify:  az-watcher run --dry-run --window 0"
 echo "       details: ${SCRIPT_DIR}/az-watcher/README.md"
 echo
-echo "If 'claude' or 'agent' is missing in a new terminal, source ~/.bashrc or reopen WSL."
+echo "If 'claude', 'agent', or 'goose' is missing in a new terminal, source ~/.bashrc or reopen WSL."
+echo "Goose telemetry is off (GOOSE_TELEMETRY_ENABLED=false). Run 'goose configure' once for a provider."
 echo "Primary clones must exist under SRC_ROOT/<repo-name>."
 echo
 herdr plugin list
@@ -427,6 +548,6 @@ echo
 echo "CLI check:"
 # python3 is not optional for review-make.sh: it flattens the HTML Azure DevOps
 # stores descriptions in, and speaks to the herdr socket for sidebar ordering.
-for c in herdr gum git micro jq python3 claude agent az flock; do
+for c in herdr gum git micro jq python3 claude agent goose az flock; do
   printf "  %-8s %s\n" "$c" "$(command -v "$c" 2>/dev/null || echo MISSING)"
 done

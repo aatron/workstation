@@ -30,7 +30,10 @@
 # on-disk folder names matching {id}-* (current naming) or {id}_* (folders made
 # before the rename) under:
 #   <herdr [worktrees].directory>/development/<id>-*/   (development)
-#   <herdr [worktrees].directory>/review/<id>-*/        (review)
+#   <herdr [worktrees].directory>/review/<id>-*/        (review story folders)
+# Code reviews from review-make.sh live at review/<id> (digits only, no slug).
+# Those are handed off to review-remove.sh — this script does not delete them
+# itself (different layout: detached checkouts, dual-review tabs).
 # Per-repo notes files now live inside the story folder; the old location (a
 # sibling of the story folder, under the type dir) is still cleaned up.
 #
@@ -77,23 +80,9 @@ fi
 
 ask() { gum input --prompt "$1 > " --placeholder "$2"; }
 
-# One-of-a-list prompt. Items are passed as ARGUMENTS, not piped in, so the
-# label that comes back is byte-identical to the one offered and can be mapped
-# straight back to its story. Prints nothing when gum errors or the user
-# pressed esc.
-#
-# DO NOT redirect stderr here. gum draws its interactive menu on STDERR and
-# returns only the chosen line on stdout (the same split fzf uses), so a
-# `2>/dev/null` silently discards the entire UI — gum then sits waiting for
-# keystrokes on a menu that was never drawn, which reads exactly like a hang.
-# Measured: with no tty, `gum choose a b c` wrote 0 bytes to stdout and the whole
-# menu to stderr. ask() above works for the same reason — it never redirects.
-select_one() {
-  local header="$1"; shift
-  (($# > 0)) || return 1
-  local height=$(( $# > 12 ? 12 : ($# < 3 ? 3 : $#) ))
-  gum choose --header "$header" --height "$height" "$@" || return 1
-}
+# DO NOT redirect gum's stderr. It draws the menu on STDERR and returns only
+# the chosen line(s) on stdout (same split as fzf). `2>/dev/null` discards the
+# UI and looks like a hang.
 
 # The stories that actually exist on disk, most recently touched first, as
 # "<id>\t<id>-<slug>  [types]" rows on stdout.
@@ -110,9 +99,15 @@ story_rows() {
       for d in "$base"/*/; do
         [[ -d "$d" ]] || continue
         name="$(basename "${d%/}")"
-        # Same shapes add_glob matches: {id}-{slug} and legacy {id}_{slug}.
-        [[ "$name" =~ ^([0-9]+)[-_] ]] || continue
-        id="${BASH_REMATCH[1]}"
+        # {id}-{slug} / legacy {id}_{slug}, plus review-make's bare review/<id>.
+        if [[ "$name" =~ ^([0-9]+)$ ]]; then
+          [[ "$type" == "review" ]] || continue
+          id="${BASH_REMATCH[1]}"
+        elif [[ "$name" =~ ^([0-9]+)[-_] ]]; then
+          id="${BASH_REMATCH[1]}"
+        else
+          continue
+        fi
         printf '%s\t%s\t%s\t%s\n' "$(stat -c %Y "${d%/}" 2>/dev/null || echo 0)" "$id" "$name" "$type"
       done
     done
@@ -129,12 +124,15 @@ story_rows() {
               printf "%s\t%s  [%s]\n", id, nm[id], t } }'
 }
 
-# Pick a story to delete. Falls back to typing an id whenever the list cannot be
-# offered — no stories on disk, or a gum that will not draw — so this is never a
-# dead end on a machine where the picker does not work.
-select_story_id() {
-  local -a ids=() labels=()
-  local line
+# Interactive pick of story ids (newest first from story_rows).
+# Prints selected ids (one per line) on stdout.
+#
+# Do NOT use gum --select-if-one: with one story it skips the UI and returns
+# immediately. One story = single-select (Enter confirms). Several = multi-select
+# (space toggles, Enter confirms). Labels stay as offered so we can map back.
+pick_story_ids() {
+  local -a ids=() labels=() selected=() out=()
+  local sid label height o i matched
   while IFS=$'\t' read -r sid label || [[ -n "$sid" ]]; do
     [[ -n "$sid" ]] || continue
     ids+=("$sid"); labels+=("$label")
@@ -142,19 +140,54 @@ select_story_id() {
 
   if ((${#ids[@]} == 0)); then
     echo "No story folders under ${HERDR_ROOT}/development|review — enter an id instead." >&2
-    ask 'Story id' '12345'
-    return
+    sid="$(ask 'Story id' '12345')" || return 1
+    [[ -n "$sid" ]] || return 1
+    printf '%s\n' "$sid"
+    return 0
   fi
 
-  local picked i
-  picked="$(select_one 'Story to delete (esc to cancel)' "${labels[@]}")" || return 0
-  [[ -n "$picked" ]] || return 0
-  for i in "${!labels[@]}"; do
-    if [[ "${labels[$i]}" == "$picked" ]]; then printf '%s\n' "${ids[$i]}"; return 0; fi
+  height=${#labels[@]}
+  (( height > 15 )) && height=15
+  (( height < 3 )) && height=3
+  if (( ${#labels[@]} == 1 )); then
+    mapfile -t selected < <(
+      gum choose \
+        --header "Delete this story? (enter confirms, esc cancels)" \
+        --height "$height" \
+        "${labels[@]}"
+    ) || return 1
+  else
+    mapfile -t selected < <(
+      gum choose --no-limit --ordered \
+        --header "Stories to delete (space toggles, enter confirms, esc cancels)" \
+        --height "$height" \
+        "${labels[@]}"
+    ) || return 1
+  fi
+
+  for o in "${selected[@]}"; do
+    o="${o//$'\r'/}"
+    o="${o#"${o%%[![:space:]]*}"}"
+    o="${o%"${o##*[![:space:]]}"}"
+    [[ -n "$o" ]] || continue
+    matched=0
+    for i in "${!labels[@]}"; do
+      if [[ "${labels[$i]}" == "$o" ]]; then
+        out+=("${ids[$i]}")
+        matched=1
+        break
+      fi
+    done
+    if (( ! matched )); then
+      # Defensive: gum echoed something we did not offer. Leading digits still win.
+      [[ "$o" =~ ^([0-9]+) ]] && out+=("${BASH_REMATCH[1]}")
+    fi
   done
-  # Defensive: gum echoed something we did not offer. The id still leads.
-  [[ "$picked" =~ ^([0-9]+)[-_] ]] && printf '%s\n' "${BASH_REMATCH[1]}"
-  return 0
+  (( ${#out[@]} > 0 )) || {
+    echo "no stories selected" >&2
+    return 1
+  }
+  printf '%s\n' "${out[@]}"
 }
 
 # Resolve story root from Herdr [worktrees].directory (mirrors worktree-make.sh).
@@ -222,9 +255,49 @@ HERDR_ROOT="$(resolve_worktree_root)"
 # --- inputs ----------------------------------------------------------------
 # An explicit arg or WT_ID always wins, so az-watcher and any other automation
 # are unaffected. Only a human with nothing supplied gets the picker.
+# Several picks: one confirm, then re-enter this script once per id (same path
+# as a typed id, with WT_ASSUME_YES so the detailed plan is not re-confirmed).
 ID="${1:-${WT_ID:-}}"
 if [[ -z "$ID" ]]; then
-  ID="$(select_story_id)"
+  _pick_out="$(pick_story_ids)" || exit 1
+  declare -a IDS=()
+  local_id=""
+  while IFS= read -r local_id || [[ -n "$local_id" ]]; do
+    local_id="${local_id//$'\r'/}"
+    local_id="${local_id#"${local_id%%[![:space:]]*}"}"
+    local_id="${local_id%"${local_id##*[![:space:]]}"}"
+    [[ -n "$local_id" ]] && IDS+=("$local_id")
+  done <<<"$_pick_out"
+  unset _pick_out local_id
+  (( ${#IDS[@]} > 0 )) || { echo "story id required" >&2; exit 1; }
+
+  if (( ${#IDS[@]} > 1 )); then
+    echo "-> selected ${#IDS[@]} stories: ${IDS[*]}"
+    if [[ "${WT_ASSUME_YES:-}" != "1" ]]; then
+      gum confirm \
+        "Delete these ${#IDS[@]} stories (worktrees, local branches, notes)? This cannot be undone." \
+        || { echo "aborted."; exit 0; }
+    fi
+    SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
+    any_ok=0
+    fail_ec=0
+    for id in "${IDS[@]}"; do
+      echo ""
+      echo "======== story ${id} ========"
+      if WT_ASSUME_YES=1 bash "$SELF" "$id"; then
+        any_ok=1
+      else
+        ec=$?
+        if (( ec != 0 && ec != 3 )); then
+          fail_ec=$ec
+        fi
+      fi
+    done
+    (( any_ok )) && exit 0
+    (( fail_ec )) && exit "$fail_ec"
+    exit 3
+  fi
+  ID="${IDS[0]}"
 fi
 [[ -n "$ID" ]] || { echo "story id required" >&2; exit 1; }
 
@@ -247,9 +320,24 @@ add_glob() {
 add_glob "${HERDR_ROOT}/development"
 add_glob "${HERDR_ROOT}/review"
 
+# review-make.sh uses review/<id> (no slug). Hand off — wrong tool for that layout.
+CODE_REVIEW_DIR="${HERDR_ROOT}/review/${ID}"
 if (( ${#CANDIDATES[@]} == 0 )); then
+  if [[ -d "$CODE_REVIEW_DIR" && "$ID" =~ ^[0-9]+$ ]]; then
+    echo "-> ${ID} is a code-review folder at ${CODE_REVIEW_DIR}"
+    echo "-> handing off to review-remove.sh (use that script for dual-review cleanups)"
+    RR="${HOME}/bin/review-remove.sh"
+    [[ -x "$RR" ]] || RR="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/review-remove.sh"
+    [[ -f "$RR" ]] || { echo "missing review-remove.sh" >&2; exit 1; }
+    rr_args=("$ID")
+    [[ "${WT_ASSUME_YES:-}" == "1" ]] && rr_args+=(--yes)
+    exec bash "$RR" "${rr_args[@]}"
+  fi
   echo "No story folder matching ${ID}-* under:"
   echo "  ${HERDR_ROOT}/development|review"
+  if [[ -d "${HERDR_ROOT}/review" ]]; then
+    echo "Tip: code reviews live at ${HERDR_ROOT}/review/<id> — run: review-remove.sh ${ID}" >&2
+  fi
   exit 3
 fi
 
@@ -443,6 +531,38 @@ else
 fi
 
 # --- execute ---------------------------------------------------------------
+# Remember focus before any close. Closing a workspace makes herdr jump the UI
+# to another row (often the last in the list); put focus back afterwards so
+# Delete Story does not yank navigation away.
+WS_LIST_JSON="$(herdr workspace list 2>/dev/null || true)"
+FOCUS_BEFORE="$(jq -r '.result.workspaces[]? | select(.focused == true) | .workspace_id' \
+  <<<"${WS_LIST_JSON:-}" | head -n1 || true)"
+mapfile -t WS_ORDER < <(jq -r '.result.workspaces[]?.workspace_id // empty' \
+  <<<"${WS_LIST_JSON:-}" 2>/dev/null || true)
+# Workspaces this run will close (story rows + any leftover/legacy ids we know).
+declare -A CLOSING=()
+for sws in "${STORY_WS_IDS[@]:-}"; do [[ -n "$sws" ]] && CLOSING["$sws"]=1; done
+for ws in "${WT_WS[@]:-}"; do [[ -n "$ws" ]] && CLOSING["$ws"]=1; done
+# If we are deleting the focused row, land on the previous survivor in the
+# pre-delete order (not herdr's default "last in list").
+FOCUS_FALLBACK=""
+if [[ -n "$FOCUS_BEFORE" && -n "${CLOSING[$FOCUS_BEFORE]:-}" ]]; then
+  idx=-1
+  for i in "${!WS_ORDER[@]}"; do
+    [[ "${WS_ORDER[$i]}" == "$FOCUS_BEFORE" ]] && { idx=$i; break; }
+  done
+  if (( idx >= 0 )); then
+    for ((j = idx - 1; j >= 0; j--)); do
+      [[ -z "${CLOSING[${WS_ORDER[$j]}]:-}" ]] && { FOCUS_FALLBACK="${WS_ORDER[$j]}"; break; }
+    done
+    if [[ -z "$FOCUS_FALLBACK" ]]; then
+      for ((j = idx + 1; j < ${#WS_ORDER[@]}; j++)); do
+        [[ -z "${CLOSING[${WS_ORDER[$j]}]:-}" ]] && { FOCUS_FALLBACK="${WS_ORDER[$j]}"; break; }
+      done
+    fi
+  fi
+fi
+
 # Close a story's workspaces - the story row AND its per-repo rows - BEFORE
 # touching any checkout. Their agents hold files inside the checkouts open, and
 # a repo row is rooted in the checkout itself; pull it out from under a live
@@ -575,6 +695,23 @@ if (( DIRTY_SKIPPED > 0 )); then
   echo "OK removed ${REMOVED_COUNT} worktree(s) for story ${ID}${LEFT_NOTE}; kept ${DIRTY_SKIPPED} with uncommitted changes."
 else
   echo "OK removed ${REMOVED_COUNT} worktree(s) for story ${ID}${WT_REPO:+ (repo ${WT_REPO})}${LEFT_NOTE}."
+fi
+
+# Put the UI back where it was (or the nearest survivor if that row was deleted).
+RESTORE_FOCUS=""
+if [[ -n "${FOCUS_BEFORE:-}" && -z "${CLOSING[$FOCUS_BEFORE]:-}" ]]; then
+  RESTORE_FOCUS="$FOCUS_BEFORE"
+elif [[ -n "${FOCUS_FALLBACK:-}" ]]; then
+  RESTORE_FOCUS="$FOCUS_FALLBACK"
+fi
+if [[ -n "$RESTORE_FOCUS" ]]; then
+  if herdr workspace list 2>/dev/null \
+       | jq -e --arg w "$RESTORE_FOCUS" \
+            '.result.workspaces[]? | select(.workspace_id == $w)' >/dev/null 2>&1; then
+    if herdr workspace focus "$RESTORE_FOCUS" >/dev/null 2>&1; then
+      echo "-> herdr:  restored focus to ${RESTORE_FOCUS}"
+    fi
+  fi
 fi
 
 # A worktree that could not be deleted must not report success: the story is

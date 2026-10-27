@@ -29,11 +29,21 @@
 #         review-23597-notes.txt                notes for the review row
 #         review-23597-reviewer-prompt.md         shared adversarial prompt (both reviewers)
 #         review-23597-orchestrator-prompt.md   orchestrator workflow
-#         review-23597-findings-claude.md       Claude reviewer output
-#         review-23597-findings-cursor.md       Cursor reviewer output
-#         review-23597-reconciled.md            orchestrator reconciliation
-#         review-23597-summary.md               STE100 summary (Summary tab)
+#         review-23597-findings-claude.md       Claude independent review (stage A)
+#         review-23597-findings-cursor.md       Cursor independent review (stage A)
+#         review-23597-cross-claude.md          Claude answers Cursor (stage 2)
+#         review-23597-cross-cursor.md          Cursor answers Claude (stage 2)
+#         review-23597-cross-*-prompt.md        prompts for the cross stage
+#         review-23597-reconciled.md            pipeline stage 4 reconciliation
+#         (no summary.md — story + review outcome live in notes.txt)
 #         review-23597-complete.json            done marker (script does not ntfy)
+#         review-23597-post-plan.json           plan after human approve
+#         review-23597-posted.json              posted marker (review-post-comments.sh)
+#
+# PIPELINE:
+#   classic — herdr reviewer tabs + Orchestrator runs review-pipeline.sh
+#   goose   — herdr prepares folder + one Goose tab; recipe opens Claude+Cursor
+#             progress panes, wait, cross, reconcile, manual post
 #         review-23597-<author>-<repo>-notes.txt
 #         <author>-<repo>/                      one PR, checked out DETACHED
 #
@@ -67,7 +77,7 @@
 #   see the TREE_TEE block.
 #
 # READ-ONLY GUARANTEES - this script is deliberately unable to change anything
-# outside your own machine:
+# outside your own machine, and the review itself must run without prompting:
 #   1. Azure DevOps: every az call goes through az_read, which refuses any
 #      command not on $AZ_READ_ONLY (show/list/invoke-with-GET). A future edit
 #      that reaches for `az boards work-item update` or `az repos pr set-vote`
@@ -75,12 +85,15 @@
 #   2. Git: worktrees are added with `git worktree add --detach`. There is no
 #      local branch and no upstream, so there is nothing for a stray `git push`
 #      to push, and no branch to accidentally commit onto.
-#   3. Claude reviewers: --permission-mode acceptEdits (findings must be written
-#      to disk; plan mode cannot) plus --disallowed-tools for git and Azure DevOps.
-#      Prompts forbid edits outside the findings file and the PR checkouts are
-#      read-only. The orchestrator may write reconciled output under the item dir.
-#   4. Cursor reviewer: $CURSOR_CMD with the same reviewer prompt; the prompt
-#      forbids commit, push, and Azure DevOps writes (no CLI deny list).
+#   3. Disk: each PR checkout is chmod'd read-only after create. Agents may write
+#      findings under the work-item folder; they cannot modify the checked-out code.
+#   4. Claude reviewer: --permission-mode auto. A classifier approves safe work
+#      (file writes, git reads, az reads) and blocks risky actions. No bypass.
+#      --disallowed-tools still blocks git writes and Azure DevOps writes.
+#      PR checkouts are chmod read-only. Orchestrator stays on acceptEdits.
+#   5. Cursor: --trust (workspace attestation for this script's folder only),
+#      --approve-mcps, --sandbox enabled, --force so tool calls do not wait on
+#      you. Not --yolo as a concept beyond --force; sandbox + RO checkouts bound it.
 #
 # Exit codes:
 #   0  at least one PR worktree was created and verified
@@ -99,23 +112,70 @@ SRC_ROOT="${WT_REVIEW_SRC_ROOT:-$HOME/source/repos}"
 ORCHESTRATOR_MODEL='claude-opus-4-5'   # or claude-opus-5
 REVIEWER_MODEL='claude-opus-4-5'
 
-# acceptEdits is required so reviewers and the orchestrator can write review
-# artifacts under the work-item folder. Repo checkouts stay read-only via the
-# prompts and --disallowed-tools on Claude tabs.
+# Orchestrator: acceptEdits so findings/reconcile/notes writes do not prompt.
+# Reviewer Claude: auto — acceptEdits still prompts on Bash that cannot be
+# statically checked (e.g. diff <(git show…)); auto lets the classifier decide
+# instead, without the bypassPermissions warning.
+# Boundedness: PR checkouts are chmod read-only; REVIEW_DISALLOWED_TOOLS still
+# blocks git writes and Azure DevOps mutates (deny wins).
 ORCHESTRATOR_PERMISSION_MODE='acceptEdits'
-REVIEWER_PERMISSION_MODE='acceptEdits'
+REVIEWER_PERMISSION_MODE='auto'
 
 # Cursor Agent CLI for the second reviewer. Same adversarial prompt file as Claude.
-CURSOR_CMD='agent --auto-review'
+#   --trust         attest this review folder (script-created); skips the dialog
+#   --approve-mcps  no MCP approval prompts
+#   --sandbox       constrain tool execution
+#   --force         do not wait for tool approval (bounded by sandbox + RO checkouts)
+CURSOR_CMD='agent --trust --approve-mcps --sandbox enabled --force'
+
+# ---------------------------------------------------------------------------
+# Which reviewers run — edit ONLY these two assignments (1 = on, 0 = off).
+# At least one must stay 1. Multi-PR coverage is unchanged either way (every
+# linked repo is still reviewed). Cross-review (swap findings) runs only when
+# BOTH are 1; with one reviewer the pipeline skips swap and reconciles that
+# one findings file.
+#   Disable Cursor:  REVIEW_ENABLE_CURSOR=0
+#   Disable Claude:  REVIEW_ENABLE_CLAUDE=0
+#   Dual again:      set both back to 1
+# ---------------------------------------------------------------------------
+REVIEW_ENABLE_CLAUDE=1
+REVIEW_ENABLE_CURSOR=1
+
+# Pipeline variant: classic (Claude reconcile) or goose (Claude+Cursor panes,
+# Cursor reconcile + Disagrees on; post after developer feedback). Menu
+# "Review - Goose" sets WT_REVIEW_PIPELINE=goose via worktree-launch.sh.
+REVIEW_PIPELINE="${WT_REVIEW_PIPELINE:-classic}"
+case "$REVIEW_PIPELINE" in
+  classic|goose) ;;
+  *)
+    echo "WT_REVIEW_PIPELINE must be classic or goose (got: ${REVIEW_PIPELINE})" >&2
+    exit 1
+    ;;
+esac
+if [[ "$REVIEW_PIPELINE" == "goose" ]]; then
+  # Goose: Claude + Cursor in right-hand progress panes (same findings slots).
+  REVIEW_ENABLE_CLAUDE=1
+  REVIEW_ENABLE_CURSOR=1
+fi
 
 # Optional machine-wide prompt bodies (empty = built-in). Repo .claude review files
 # still win for the adversarial instructions block when present.
 WT_REVIEW_ORCHESTRATOR_PROMPT="${WT_REVIEW_ORCHESTRATOR_PROMPT:-}"
 WT_REVIEW_REVIEWER_PROMPT="${WT_REVIEW_REVIEWER_PROMPT:-}"
 
-# Defence in depth behind plan mode. Plan mode already blocks edits; these close
-# the shell-shaped hole, because a review must not commit, must not push, and
-# must not write back to Azure DevOps.
+# Pre-approve Bash + file tools for unattended review. Agents use find/cat/ls/rg
+# as well as git; Bash(git *) alone caused mid-review permission prompts.
+# Write forms of git / Azure DevOps stay blocked by the deny lists (deny wins).
+REVIEW_ALLOWED_TOOLS=(
+  'Bash'
+  'Edit'
+  'Write'
+  'Read'
+  'Grep'
+  'Glob'
+)
+
+# Claude deny list for reviewers: no git writes and no Azure DevOps writes.
 REVIEW_DISALLOWED_TOOLS=(
   'Bash(git commit:*)'
   'Bash(git push:*)'
@@ -134,19 +194,64 @@ REVIEW_DISALLOWED_TOOLS=(
   'Bash(az devops invoke:*)'
 )
 
+# Reconcile stage (pipeline stage 4) may GET PR threads and run
+# review-post-comments.sh after the human approves. Stages 1–3 are shell-owned
+# by review-pipeline.sh (wait + cross), not Claude Bash.
+ORCHESTRATOR_ALLOWED_TOOLS=(
+  'Bash(git *)'
+  'Bash(review-post-comments*)'
+  'Bash(*review-post-comments.sh*)'
+  'Edit'
+  'Write'
+  'Read'
+)
+ORCHESTRATOR_DISALLOWED_TOOLS=(
+  'Bash(git commit:*)'
+  'Bash(git push:*)'
+  'Bash(git add:*)'
+  'Bash(git reset:*)'
+  'Bash(git checkout:*)'
+  'Bash(git switch:*)'
+  'Bash(git rebase:*)'
+  'Bash(git merge:*)'
+  'Bash(git cherry-pick:*)'
+  'Bash(git worktree:*)'
+  'Bash(az boards:*)'
+  'Bash(az repos pr update:*)'
+  'Bash(az repos pr set-vote:*)'
+  'Bash(az repos pr reviewer:*)'
+)
+
 # Which linked PRs to review. Abandoned PRs are dead code by definition.
 REVIEW_PR_STATUS=(active completed)
 
-# Tabs. Dual adversarial review runs at the work-item row; PR rows are notes only.
+# Tabs. Reviewer tabs follow REVIEW_ENABLE_*; PR rows are notes only.
 ROOT_TABS=(bash)
-REVIEW_TABS=(Orchestrator 'Claude Opus Reviewer' 'Cursor Auto Reviewer' notes Summary)
+REVIEW_TABS=()   # filled by build_review_tabs
 PR_TABS=(notes)
 
-# Above this size the prompt is not passed as an argument at all - claude is told
-# to read the prompt file instead. Linux allows a far longer command line than
-# Windows does, but the limit is kept the same on both sides so a review behaves
-# identically wherever it runs.
-PROMPT_MAX_CHARS=12000
+build_review_tabs() {
+  if [[ "$REVIEW_PIPELINE" == "goose" ]]; then
+    # Goose + repos list tab (no per-repo herdr workspaces). Progress panes open
+    # to the right of Goose at runtime.
+    REVIEW_TABS=(Goose repos)
+  else
+    REVIEW_TABS=(Orchestrator)
+    (( REVIEW_ENABLE_CLAUDE )) && REVIEW_TABS+=('Claude Opus Reviewer')
+    (( REVIEW_ENABLE_CURSOR )) && REVIEW_TABS+=('Cursor Auto Reviewer')
+  fi
+  # notes, then bash on the far right (idle shell; no startup cmd).
+  REVIEW_TABS+=(notes bash)
+}
+
+require_reviewers_enabled() {
+  if (( ! REVIEW_ENABLE_CLAUDE && ! REVIEW_ENABLE_CURSOR )); then
+    echo "REVIEW_ENABLE_CLAUDE and REVIEW_ENABLE_CURSOR are both 0; enable at least one." >&2
+    exit 1
+  fi
+}
+
+dual_reviewers() { (( REVIEW_ENABLE_CLAUDE && REVIEW_ENABLE_CURSOR )); }
 
 # Tree connectors, reported as each row's $tree sidebar token so they render to
 # the LEFT of the state icon:
@@ -510,30 +615,65 @@ pane_id_by_tab() {
     | jq -r --arg tab "$2" '.result.panes[]? | select(.tab_id==$tab) | .pane_id' | head -n1
 }
 
+# Wait until the pane's foreground is a settled shell (only shell process names
+# for two consecutive polls). A brand-new pane runs profile hooks (manpath,
+# etc.) that briefly look "busy"; treating the first non-shell as permanent
+# busy is what skipped every create-time start of micro/claude/agent.
+# Returns 0 when idle-shell, 1 when a durable app is already running (or timeout).
 pane_ready_and_idle() {
-  local pane="$1" deadline=$((SECONDS + 5)) names="" n
+  local pane="$1" deadline=$((SECONDS + 20)) names="" n only_shell durable stable=0
   while (( SECONDS < deadline )); do
     names="$(herdr_json pane process-info --pane "$pane" 2>/dev/null \
              | jq -r '.result.process_info.foreground_processes[]?.name' || true)"
-    [[ -n "$names" ]] && break
-    sleep 0.2
+    if [[ -z "$names" ]]; then
+      stable=0
+      sleep 0.25
+      continue
+    fi
+
+    only_shell=1
+    durable=0
+    while read -r n; do
+      case "$n" in
+        ""|bash|sh|dash|zsh|fish|"-bash"|"-sh"|"-zsh") ;;
+        micro|nvim|vim|vi|emacs|claude|agent|cursor-agent|MainThread|node)
+          durable=1; only_shell=0; break ;;
+        *) only_shell=0 ;;
+      esac
+    done <<<"$names"
+
+    if (( durable )); then
+      return 1
+    fi
+    if (( only_shell )); then
+      stable=$((stable + 1))
+      (( stable >= 2 )) && return 0
+    else
+      # Transient profile noise (manpath, …) — keep waiting.
+      stable=0
+    fi
+    sleep 0.25
   done
-  [[ -n "$names" ]] || return 0
-  while read -r n; do
-    case "$n" in ""|bash|sh|dash|zsh|fish|"-bash"|"-sh"|"-zsh") ;; *) return 1 ;; esac
-  done <<<"$names"
-  return 0
+  return 1
 }
 
+# Submit a command into a tab's pane, cd'd to the directory first so it runs
+# there regardless of where the pane started.
+# Returns 0 when the command was submitted, 1 when the pane was busy or missing.
 run_in_tab() {
   local ws="$1" tab="$2" dir="$3" cmd="$4" pane
   pane="$(pane_id_by_tab "$ws" "$tab")"
-  [[ -n "$pane" ]] || { echo "WARNING: no pane found for tab ${tab}" >&2; return 0; }
+  [[ -n "$pane" ]] || { echo "WARNING: no pane found for tab ${tab}" >&2; return 1; }
   if ! pane_ready_and_idle "$pane"; then
     echo "-> tab ${tab}: pane busy, left as-is"
-    return 0
+    return 1
   fi
-  herdr_quiet pane run "$pane" "cd $(sh_quote "$dir") && ${cmd}"
+  # Do not swallow pane-run failures — a silent fail is how empty tabs ship.
+  if ! herdr pane run "$pane" "cd $(sh_quote "$dir") && ${cmd}" >/dev/null; then
+    echo "WARNING: herdr pane run failed for tab ${tab} (${pane})" >&2
+    return 1
+  fi
+  return 0
 }
 
 # herdr hands paths back with a trailing slash or a doubled separator now and
@@ -678,16 +818,16 @@ rename_workspace() {
 # $5 (tab name -> command line). Sets NEW_WS to the workspace id, or '' when herdr
 # would not create it.
 #
-# Commands are only ever submitted into tabs THIS CALL created. pane_ready_and_idle
-# is not enough on its own - herdr reports claude in a busy pane but reports only
-# the shell for a pane sitting in micro, so a re-run that trusted the probe would
-# type "micro <path>" straight into an open notes buffer.
+# Start each tab's command when its pane is still an idle shell. herdr-plus
+# layout often creates tabs without starting them; a re-run must fill those.
+# pane_ready_and_idle refuses a pane that already has micro, claude, or agent
+# in the foreground, so an open editor or agent is never typed into.
 NEW_WS=""
 init_workspace() {
   local dir="$1" label="$2" bare_name="$3"
   local -n _wstabs="$4"
   local -n _wscmds="$5"
-  local -A fresh=() tabs=()
+  local -A tabs=()
   local ws created root_tab name id t json
   local -a started=() kept=()
 
@@ -710,7 +850,6 @@ init_workspace() {
     root_tab="$(jq -r '.result.tab.tab_id // empty' <<<"$created")"
     if [[ -n "$root_tab" && ${#_wstabs[@]} -gt 0 ]]; then
       herdr_quiet tab rename "$root_tab" "${_wstabs[0]}"
-      fresh["${_wstabs[0]}"]=1
     fi
     load_ws_index refresh
     echo "-> herdr:  workspace $ws created ($label) at $dir"
@@ -730,24 +869,25 @@ init_workspace() {
     id=""
     [[ -n "$t" ]] && id="$(jq -r '.result.tab.tab_id // empty' <<<"$t")"
     if [[ -n "$id" ]]; then
-      tabs["$name"]="$id"; fresh["$name"]=1
+      tabs["$name"]="$id"
     else
       echo "WARNING: could not create the '${name}' tab in workspace ${ws}" >&2
     fi
   done
 
   for name in "${_wstabs[@]}"; do
-    [[ -n "${fresh[$name]:-}" && -n "${tabs[$name]:-}" ]] || continue
+    [[ -n "${tabs[$name]:-}" ]] || continue
     [[ -n "${_wscmds[$name]:-}" ]] || continue
-    run_in_tab "$ws" "${tabs[$name]}" "$dir" "${_wscmds[$name]}" || true
+    if run_in_tab "$ws" "${tabs[$name]}" "$dir" "${_wscmds[$name]}"; then
+      started+=("$name")
+    else
+      kept+=("$name")
+    fi
   done
 
-  for name in "${_wstabs[@]}"; do
-    if [[ -n "${fresh[$name]:-}" ]]; then started+=("$name"); else kept+=("$name"); fi
-  done
   echo "-> tabs:   $(join_commas "${_wstabs[@]}")"
-  if (( ${#started[@]} )); then echo "           started: $(join_commas "${started[@]}")"; fi
-  if (( ${#kept[@]} ));    then echo "           left as they were: $(join_commas "${kept[@]}")"; fi
+  if (( ${#started[@]} )); then echo "           started (idle panes): $(join_commas "${started[@]}")"; fi
+  if (( ${#kept[@]} ));    then echo "           left as they were (busy or missing): $(join_commas "${kept[@]}")"; fi
 
   NEW_WS="$ws"
   return 0
@@ -921,6 +1061,14 @@ nothing else.
 * Do NOT run git commit, git push, git add, git reset, git checkout, git switch,
   git merge, git rebase, or anything else that changes a repository, its index,
   or its branches. Reading history and diffs is expected and fine.
+* For every git read use \`git -C <absolute-checkout-path> …\`. Never \`cd\` into
+  a checkout (Claude always stops for approval on \`cd\` + git). Never \`cd\` at
+  all in Bash during this review — use absolute paths with Read/Grep/Bash.
+* Prefer Read / Grep / Glob over shell. If you use Bash, avoid process
+  substitution (\`<(…)\` / \`>(…)\`); use temp files or two separate reads.
+* Do NOT launch background agents, subagents, or the Task tool. You review every
+  PR yourself in this session and write one findings file. Parallel agents cause
+  approval prompts and lose results.
 * Do NOT change anything in Azure DevOps. No comments, no votes, no reviewer
   changes, no work item edits, no PR status changes. Do not run \`az boards\`,
   \`az repos pr update\`, \`az repos pr set-vote\`, or \`az devops invoke\`.
@@ -939,6 +1087,8 @@ cursor_reviewer_extra() {
 ## Cursor reviewer - same rules as Claude
 
 * Do NOT run git commit, git push, or any command that changes a repository.
+* Always \`git -C <absolute-path> …\`. Never \`cd\` into a checkout.
+* Do NOT launch subagents or background agents. Review every PR in this session.
 * Do NOT change anything in Azure DevOps.
 * Write findings only to: \`${findings_path}\`
 * Do not apply fixes in the PR checkouts.
@@ -952,14 +1102,24 @@ orchestrator_constraint_block() {
 
 You reconcile two independent reviews. You do NOT re-review the code from scratch.
 
-* You may write files only under \`${item_dir}\` (reconciled summary, summary,
-  complete marker, optional HTML). Do not edit PR checkouts or files outside
-  that folder.
+* You may write files only under \`${item_dir}\` (reconciled, notes outcome,
+  complete marker, optional HTML, post plan, posted marker, proposed comments).
+  Do not edit PR checkouts or files outside that folder. Do NOT create
+  \`summary.md\`.
 * Do NOT run git commit, git push, git add, git reset, git checkout, git switch,
   git merge, git rebase, or anything else that changes a repository.
-* Do NOT change anything in Azure DevOps.
+* Always \`git -C <absolute-path> …\`. Never \`cd\` into a checkout.
+* Do NOT launch subagents or background agents.
+* Do NOT wait or poll for reviewer files. review-pipeline.sh already finished
+  the wait/cross stages that apply; the input files listed below are ready.
+* Do NOT change Azure DevOps until the human explicitly approves posting in this
+  chat (see Post results). Before that: no comments, no votes, no reviewer
+  changes, no work item edits.
+* After approval, the only write path is \`review-post-comments.sh\` with the
+  post-plan JSON. Do not hand-roll \`az devops invoke\` POST bodies.
 * Do NOT call ntfy or any notification service. The script does not notify;
-  writing \`review-*-complete.json\` is the done signal.
+  writing \`review-*-complete.json\` is the done signal for the local review.
+* Do NOT use bash brace patterns (\`{1..N}\`, \`{a,b}\`) in shell commands.
 EOF
 }
 
@@ -1001,95 +1161,493 @@ diff and not to praise it.
 
 Write your findings to the findings file given in the constraints block, in
 severity order, worst first. Overwrite that file when you are done (one file,
-complete review). For each finding:
+complete review). For each finding use this shape (required fields first):
 
+* **PR** \`{prId}\` (\`{repo}\`) — must match a pull request in the context
+* **category** \`major\` | \`medium\` | \`minor\`
+* **anchor** \`path/to/file:line\` — path as in the diff (repo-relative)
 * a one-line claim
-* \`file:line\` for where it lives
 * the concrete input or sequence that triggers it
 * what goes wrong as a result
 * the smallest change you would suggest - described, not applied
 
-Then two short sections:
+Then two short sections. Use these exact Markdown headings (lowercase "sound");
+the pipeline waits on the string \`Verified sound\`:
 
-* **Verified sound** - what you specifically checked and found correct. Be
-  concrete; this is how the reader knows what your review actually covered.
-* **Not covered** - what you did not or could not examine, and why.
+## Verified sound
+
+what you specifically checked and found correct. Be concrete; this is how the
+reader knows what your review actually covered.
+
+## Not covered
+
+what you did not or could not examine, and why.
 
 If you find no real defect in an area, say so plainly. An honest "this looks
 correct, and here is what I checked" is worth more than an invented finding.
 EOF
 }
 
-default_orchestrator_instructions() {
-  local id="$1" f_claude="$2" f_cursor="$3" f_recon="$4" f_summary="$5" f_done="$6" f_html="$7"
+# FCTG Monorepo checkout: has CODING_STANDARDS.md + standards-review skill, or
+# the Azure repo name looks like the monorepo.
+is_monorepo_checkout() {
+  local path="$1" name="${2:-}"
+  [[ -n "$path" && -d "$path" ]] || return 1
+  if [[ -f "${path}/CODING_STANDARDS.md" \
+        && -f "${path}/.agents/skills/standards-review/SKILL.md" ]]; then
+    return 0
+  fi
+  case "$name" in
+    *Monorepo*|*monorepo*|FCTG_Monorepo) return 0 ;;
+  esac
+  return 1
+}
+
+# For each Monorepo PR: both reviewers must run standards-review AND
+# adversarial-review from the checkout skill files (create-pr gates).
+monorepo_dual_review_block() {
+  local i path name any=0
+  local -a lines=()
+  for i in "${!P_ID[@]}"; do
+    (( P_OK[i] )) || continue
+    path="${P_PATH[$i]:-}"
+    name="${P_AZREPO[$i]:-}"
+    is_monorepo_checkout "$path" "$name" || continue
+    any=1
+    lines+=("- PR ${P_ID[$i]} (\`${name}\`) checkout: \`${path}\`")
+    lines+=("  - Standards skill: \`${path}/.agents/skills/standards-review/SKILL.md\`")
+    lines+=("  - Adversarial skill: \`${path}/.agents/skills/adversarial-review/SKILL.md\`")
+    lines+=("  - Standards file: \`${path}/CODING_STANDARDS.md\`")
+  done
+  (( any )) || return 0
   cat <<EOF
-## Your task: orchestrate a dual adversarial review for work item ${id}
+## FCTG Monorepo — standards-review + adversarial-review (required)
 
-Two reviewers (Claude and Cursor) run the same adversarial prompt in parallel.
-You run after both have finished.
+For each Monorepo pull request below, you MUST run **both** reviews in this
+same session (no Task / subagents — they ask for approval and drop results).
+Read the skill files and \`CODING_STANDARDS.md\` from the absolute checkout
+paths. Use the base/head (or merge-base) commands already listed in the context
+for that PR. Do not create new worktrees.
 
-### Step 1 - Wait for reviewer outputs
+$(printf '%s\n' "${lines[@]}")
 
-Poll until both files exist and each contains a completed review (not empty,
-not a placeholder):
+### How to run each Monorepo PR
 
-* Claude: \`${f_claude}\`
-* Cursor: \`${f_cursor}\`
+1. **Standards review** — follow the standards-review skill (diff-only; quote
+   rules with file + section; skip what ESLint/analyzers already enforce).
+   Map tiers into findings categories: Blocking → \`major\`, Should fix →
+   \`medium\`, Consider → \`minor\`.
+2. **Adversarial review** — follow the adversarial-review skill (bugs only, not
+   conventions). Keep Major / Medium / Minor as \`major\` / \`medium\` / \`minor\`.
+3. Prefer Read / Grep / Glob over shell. If you use Bash, avoid process
+   substitution (\`<(…)\` / \`>(…)\`); use temp files or two separate reads.
 
-If one is missing after a reasonable wait, say so in the reconciled file and
-stop without writing the complete marker.
+### Findings file shape for Monorepo PRs
 
-### Step 2 - Cross-review (content, not severity nitpicks)
+Under each Monorepo PR heading in the findings file, include both sections
+before the shared \`## Verified sound\` / \`## Not covered\`:
 
-For each finding in one review, decide whether the other reviewer **agrees** or
-**disagrees** on the substance (same defect, same risk). Ignore severity label
-differences unless the severity gap reflects a real disagreement about impact.
+\`\`\`markdown
+## Standards review
+(findings with **PR** / **category** / **anchor** as usual; Gate line)
 
-Write a short **Cross-review** section listing pairs: agree / disagree / only in
-Claude / only in Cursor, with one line of rationale for each disagree.
+## Adversarial review
+(findings with **PR** / **category** / **anchor** as usual; Gate line)
+\`\`\`
 
-### Step 3 - Reconcile
+Non-Monorepo PRs in the same work item keep the ordinary adversarial method
+only (no standards-review skill).
+EOF
+}
 
-Write \`${f_recon}\` with:
+# Always appended. A repo-supplied review prompt replaces the built-in method
+# above, so the multi-PR rule has to live here or it disappears.
+multi_repo_reviewer_block() {
+  cat <<'EOF'
+## Multiple pull requests
 
-1. **Consensus findings** - defects both reviewers accept (or you accept after
-   reading the code when they disagree).
-2. **Disputed** - where reviewers disagree; state your ruling and why.
-3. **Single-reviewer** - findings only one reviewer raised; include if credible.
-4. **Cross-review** - from step 2.
-5. **Verified sound** and **Not covered** - merged from both, de-duplicated.
+When the context lists more than one pull request, review every repo yourself in
+this same session. Do not stop after the first checkout. Do not spawn subagents
+or background agents (they ask for approval and do not write the findings file).
 
-Focus on whether the change is safe to merge, not on polishing wording.
+1. For each pull request in the context, in order: run the review method for
+   that checkout (adversarial only, or standards + adversarial when the
+   Monorepo section above applies). Use `git -C <absolute-checkout-path> …`
+   and absolute paths for Read/Grep. Never `cd` into the checkout.
+2. After every PR is reviewed, do the cross-repo pass yourself: contracts, shared
+   types, API or message shape, call order, configuration, and behaviour that is
+   correct in one repo and wrong when the repos run together.
+3. Write the single findings file once at the end. Use one section per pull
+   request (heading includes the PR id and repo). Then add a section named
+   **Cross-repo interaction**. Cite `file:line` in the checkout where the defect
+   lives. Include **Verified sound** and **Not covered** for the whole review.
 
-### Step 4 - Summary (STE100)
+When the context lists only one pull request, review that pull request the same
+way (no subagents, one findings file).
+EOF
+}
 
-Write \`${f_summary}\` in Simplified Technical English: short sentences, active
+multi_repo_orchestrator_block() {
+  cat <<'EOF'
+## Multiple pull requests
+
+When the context lists more than one pull request, each reviewer file must have one section per pull request and a **Cross-repo interaction** section.
+
+* Keep per-repo findings separate. Do not drop a defect because it appears in only one repo.
+* Reconcile cross-repo findings the same way as other findings (consensus, disputed, single-reviewer).
+* In the notes Review outcome, state whether the repos still fit together. A pull request can be correct alone and still be wrong with the others.
+* When posting, every comment's \`prId\` must be the pull request that owns that file. Never post a Monorepo finding on a different repo's PR.
+EOF
+}
+
+# Fixed post prompt (same bytes every review). Reliability: structured plan JSON
+# + review-post-comments.sh. Not a Claude/Cursor user setting.
+default_post_instructions() {
+  local id="$1" f_recon="$2" f_plan="$3" f_posted="$4" helper="$5"
+  cat <<EOF
+### Step 7 - Wait for human approval (do not post yet)
+
+Stop after the complete marker. Show the human the Review outcome in notes and
+the reconciled findings. Wait until the human explicitly says to approve or
+post (for example "approve", "post", "ship it"). Do not post on silence, ntfy,
+or the complete marker alone.
+
+### Step 8 - Post results (only after that approval)
+
+Use this same procedure every time. Do not invent a different posting style.
+
+1. From \`${f_recon}\`, build \`${f_plan}\` as JSON:
+
+\`\`\`json
+{
+  "workItemId": ${id},
+  "comments": [
+    {
+      "prId": 9291,
+      "category": "major",
+      "filePath": "/path/in/repo.cs",
+      "line": 42,
+      "body": "**[major]** one-line claim\\n\\nWhy it matters.\\n\\nSuggested fix (described only).",
+      "replyToThreadId": null
+    }
+  ]
+}
+\`\`\`
+
+Rules for the plan:
+
+* One plan entry per finding you will post (consensus + credible single-reviewer).
+* \`prId\` is mandatory and must be the correct pull request for that file when
+  the work item has multiple PRs.
+* \`category\` is \`major\`, \`medium\`, or \`minor\`. Put \`**[category]**\` at the
+  start of \`body\`.
+* \`filePath\` + \`line\` anchor the comment on the modified (right) side.
+* Prefer anchored code comments. Use a PR-level thread only when there is no
+  honest file:line (then omit filePath/line and say so in the body).
+
+2. Related existing comments — for each pull request in the context:
+
+   * Run: \`${helper} --list-threads <prId>\`
+   * Start one subagent. Give it the new findings for that PR and the thread
+     list. For each finding that matches an existing thread (same file/area or
+     same defect), the subagent returns either:
+     * **agree** — reply that the prior comment still applies / is confirmed, or
+     * **adjust** — reply with agreement plus extra modifications still needed
+   * Put those as plan entries with \`replyToThreadId\` set to that thread id
+     (no new anchor). New defects stay as new anchored comments.
+
+3. Dry-check the plan: every \`prId\` appears in the review context; every
+   anchored path exists in that PR's checkout; categories are present.
+
+4. Post with the helper only (do not hand-roll REST):
+
+   \`${helper} ${f_plan}\`
+
+5. When posting succeeds, write \`${f_posted}\`:
+
+\`\`\`json
+{"workItemId": ${id}, "plan": "$(basename "$f_plan")", "postedAt": "<ISO-8601 UTC>"}
+\`\`\`
+
+If the human rejects posting, leave \`${f_plan}\` / \`${f_posted}\` unwritten and stop.
+EOF
+}
+
+# Cross-review prompt: model A answers model B's independent findings.
+default_cross_instructions() {
+  local id="$1" mine="$2" theirs="$3" out="$4" mine_label="$5" theirs_label="$6"
+  cat <<EOF
+## Your task: cross-review for work item ${id}
+
+You already wrote an independent review. Now answer the other reviewer's findings.
+
+* Your prior findings: \`${mine}\` (${mine_label})
+* Their findings (read in full): \`${theirs}\` (${theirs_label})
+* Write ONLY to: \`${out}\`
+
+### Method
+
+1. Read their findings. For each finding, state **agree**, **disagree**, or
+   **adjust** (agree in part) with one line of rationale on substance (same
+   defect / same risk). Ignore severity-label nits unless impact differs.
+2. List any of **your** findings they missed that you still stand by (short).
+3. Do not re-review the whole diff from scratch. Use \`git -C <absolute-path>\`
+   only to verify a disputed claim. Never \`cd\`. No subagents.
+
+### Output shape
+
+\`\`\`
+## Responses to ${theirs_label} findings
+* **PR** … **anchor** … — agree|disagree|adjust — rationale
+
+## My findings they missed
+* …
+
+## Cross-review complete
+\`\`\`
+
+End with a line that is exactly \`## Cross-review complete\`.
+EOF
+}
+
+# Shared STE100 "write outcome into notes" block (no summary.md).
+notes_outcome_instructions() {  # notes_outcome_instructions <notes-path> [extra-bullets...]
+  local f_notes="$1"
+  shift
+  local extra="" b
+  for b in "$@"; do
+    [[ -n "$b" ]] && extra+=$'\n'"* ${b}"
+  done
+  cat <<EOF
+### Step 2 - Review outcome in notes (STE100)
+
+Do NOT write \`summary.md\`. Put the outcome in \`${f_notes}\`.
+
+Replace any existing section that starts with the exact heading
+\`## Review outcome\` (from that heading through the next \`## \` heading or
+EOF). If none exists, append it after the story summary / scratch notes.
+
+Write that section in Simplified Technical English: short sentences, active
 voice, one instruction per line where you use steps, no filler. Include:
 
 * Work item id and title
 * PR count and repos
 * Merge recommendation (approve / fix first / block) with the top reasons
-* Numbered list of must-fix items (if any)
+* Numbered list of must-fix items (if any)${extra}
 * Optional nice-to-have list (short)
 
-Open the Summary tab file when done (it is already bound to micro).
+Keep the earlier \`## Story summary\` block in the notes file unchanged.
+EOF
+}
 
-### Step 5 - Optional HTML
+default_orchestrator_instructions() {
+  local id="$1" f_claude="$2" f_cursor="$3" x_claude="$4" x_cursor="$5"
+  local f_recon="$6" f_notes="$7" f_done="$8" f_html="$9"
+  local f_plan="${10}" f_posted="${11}" helper="${12}"
+  local inputs step1
+  if dual_reviewers; then
+    inputs="* Claude independent: \`${f_claude}\`
+* Cursor independent: \`${f_cursor}\`
+* Claude cross (answers Cursor): \`${x_claude}\`
+* Cursor cross (answers Claude): \`${x_cursor}\`"
+    step1="Write \`${f_recon}\` with:
+
+1. **Consensus findings** - both sides accept (independent agree, or cross-review
+   agree), or you accept after reading the code when they still disagree.
+2. **Disputed** - unresolved disagreement; your ruling and why.
+3. **Single-reviewer** - only one side raised it; include if still credible after
+   the cross pass.
+4. **Cross-review digest** - short table of agree / disagree / adjust from the
+   two cross files.
+5. **Verified sound** and **Not covered** - merged, de-duplicated.
+
+Focus on whether the change is safe to merge, not on polishing wording."
+  else
+    inputs=""
+    (( REVIEW_ENABLE_CLAUDE )) && inputs+="* Claude findings: \`${f_claude}\`"$'\n'
+    (( REVIEW_ENABLE_CURSOR )) && inputs+="* Cursor findings: \`${f_cursor}\`"$'\n'
+    inputs+="
+Single-reviewer mode: there is no opposing model and no cross-review files.
+Every pull request / repo in the context must still appear in the findings
+(section per PR + Cross-repo interaction when there are multiple PRs)."
+    step1="Write \`${f_recon}\` from that one findings file:
+
+1. **Findings** - keep the reviewer's list; drop only clear duplicates or
+   non-defects. Preserve **PR** / **category** / **anchor**.
+2. **Verified sound** and **Not covered** - from the findings file.
+3. Note at the top that this was a single-reviewer run (which model).
+
+Focus on whether the change is safe to merge, not on polishing wording."
+  fi
+  cat <<EOF
+## Your task: reconcile the review for work item ${id}
+
+review-pipeline.sh already finished the wait/cross stages that apply for this
+run. Do not wait, poll, or call other models. Read the input files and produce
+the final artifacts.
+
+### Inputs (all ready)
+
+${inputs}
+
+### Step 1 - Reconcile
+
+${step1}
+
+$(notes_outcome_instructions "$f_notes")
+
+### Step 3 - Optional HTML
 
 If there are many must-fix items (more than five) or large suggested diffs,
-also write \`${f_html}\` - a single self-contained HTML page listing findings
-with file links for a human reader. Skip this file when the review is small.
+also write \`${f_html}\` - a single self-contained HTML page. Skip when small.
 
-### Step 6 - Done marker
+### Step 4 - Done marker
 
-When \`${f_recon}\` and \`${f_summary}\` are complete, write \`${f_done}\` as
-JSON:
+When \`${f_recon}\` is written and \`${f_notes}\` has \`## Review outcome\`,
+write \`${f_done}\` as JSON:
 
 \`\`\`json
-{"workItemId": ${id}, "reconciled": "$(basename "$f_recon")", "summary": "$(basename "$f_summary")", "completedAt": "<ISO-8601 UTC>"}
+{"workItemId": ${id}, "reconciled": "$(basename "$f_recon")", "notes": "$(basename "$f_notes")", "completedAt": "<ISO-8601 UTC>"}
 \`\`\`
 
 Use the real UTC timestamp. Do not call ntfy or any other notifier.
+
+$(default_post_instructions "$id" "$f_recon" "$f_plan" "$f_posted" "$helper")
+EOF
+}
+
+# Goose pipeline: Cursor reconciles; must include "Disagrees on"; post is manual
+# until the developer gives feedback and then asks to post.
+# $7 = notes.txt, $13 = proposed-comments.md
+default_goose_orchestrator_instructions() {
+  local id="$1" f_a="$2" f_b="$3" x_a="$4" x_b="$5"
+  local f_recon="$6" f_notes="$7" f_done="$8" f_html="$9"
+  local f_plan="${10}" f_posted="${11}" helper="${12}" f_proposed="${13}"
+  cat <<EOF
+## Your task: reconcile the Goose review for work item ${id}
+
+You are the Reconcile agent (interactive herdr progress pane). Do not wait, poll,
+or call other models again. Read the inputs and produce the final artifacts.
+
+### Inputs (all ready)
+
+* Claude independent: \`${f_a}\`
+* Cursor independent: \`${f_b}\`
+* Claude cross (answers Cursor): \`${x_a}\`
+* Cursor cross (answers Claude): \`${x_b}\`
+* Notes (story summary already present): \`${f_notes}\`
+
+### Severity rules (apply everywhere below)
+
+* Rank: \`major\` > \`medium\` > \`minor\`.
+* When Claude and Cursor agree on the defect but disagree only on category,
+  the posted \`category\` is the **higher** of the two.
+* Put that severity discrepancy **inside the PR comment body** (see Step 3), not
+  in \`## Disagrees on\`.
+* \`## Disagrees on\` (reconciled + notes outcome) lists only substance
+  disagreements (different defect, risk, fix, or whether it is a finding).
+  **Do not** list items whose only difference is category severity.
+
+### Step 1 - Reconcile
+
+Write \`${f_recon}\` with these exact section headings (in this order):
+
+1. **Consensus findings** - both sides accept (independent agree, or cross-review
+   agree), or you accept after reading the code when they still disagree. For
+   each finding state the final \`category\` (higher if they only differed on
+   severity).
+2. **Disagrees on** - unresolved **substance** disagreements only. For each:
+   what Claude said, what Cursor said, your ruling, and why. Use this exact
+   heading text: \`## Disagrees on\`. Omit severity-only disagreements.
+3. **Single-reviewer** - only one side raised it; include if still credible after
+   the cross pass.
+4. **Cross-review digest** - short table of agree / disagree / adjust from the
+   two cross files.
+5. **Verified sound** and **Not covered** - merged, de-duplicated.
+
+Focus on whether the change is safe to merge, not on polishing wording.
+
+$(notes_outcome_instructions "$f_notes" \
+  'each must-fix item with final category' \
+  'A short **Disagrees on** bullet list (substance only; or "none")' \
+  "One line pointing at \`${f_proposed}\` for the full PR comment text")
+
+### Step 3 - Proposed PR comments (required — not a short paraphrase)
+
+The notes outcome is too short for posting. Before the done marker, write the
+exact comment text that \`review-post-comments.sh\` will send.
+
+1. Write \`${f_proposed}\` as Markdown. **Group by pull request.** Use a level-2
+   heading per PR, then one subsection per comment under that PR (consensus +
+   credible single-reviewer; skip dropped notes). Shape:
+
+\`\`\`markdown
+## PR {prId} — {repo name}
+
+### Comment N — {category}
+
+* **category:** \`major\` | \`medium\` | \`minor\`   ← higher if severity differed
+* **anchor:** \`path/to/file:line\` (or \`PR-level\` if no honest file:line)
+* **body:**
+
+**[{category}]** one-line claim
+
+Severity note: Claude said {catA}; Cursor said {catB} — posting as {higher}.
+(Omit the Severity note line when both agreed on category.)
+
+Why it matters (concrete failure / risk).
+
+Suggested fix (described only, not applied).
+\`\`\`
+
+   List every PR that receives at least one comment as its own \`## PR …\`
+   section. The \`body\` block must be the full ADO comment text, starting with
+   \`**[category]**\`. Do not summarise findings into one-liners here — paste the
+   claim, why, and fix in full. Include the Severity note in the body when the
+   two reviewers disagreed on category.
+
+2. Write the same comments as draft \`${f_plan}\` JSON (same schema as the post
+   step below). Every plan entry must have \`prId\`, \`category\` (the higher when
+   severity differed), and \`body\` (including the Severity note when applicable).
+   Use \`filePath\` + \`line\` when you have an anchor; otherwise omit them and
+   say PR-level in the body. \`replyToThreadId\` is null until the post step
+   matches existing threads.
+
+### Step 4 - Optional HTML
+
+If there are many must-fix items (more than five) or large suggested diffs,
+also write \`${f_html}\` - a single self-contained HTML page. Skip when small.
+
+### Step 5 - Done marker
+
+When \`${f_recon}\`, the \`## Review outcome\` section in \`${f_notes}\`,
+\`${f_proposed}\`, and \`${f_plan}\` are complete, write \`${f_done}\` as JSON:
+
+\`\`\`json
+{"workItemId": ${id}, "reconciled": "$(basename "$f_recon")", "notes": "$(basename "$f_notes")", "proposedComments": "$(basename "$f_proposed")", "plan": "$(basename "$f_plan")", "pipeline": "goose", "completedAt": "<ISO-8601 UTC>"}
+\`\`\`
+
+Use the real UTC timestamp. Do not call ntfy or any other notifier.
+
+### Step 6 - Stop for developer feedback (manual post)
+
+Show the developer, in this order:
+
+1. The \`## Review outcome\` section from \`${f_notes}\`
+2. **Disagrees on** from \`${f_recon}\` (substance only; no severity-only rows)
+3. The full \`${f_proposed}\` — grouped by PR, every comment with **category**
+   (higher on severity ties) and full \`body\` text. Do not replace this with a
+   shorter list.
+
+Do NOT post to Azure DevOps yet. Wait for feedback in this chat (edits, drop
+findings, change severity, rewrite a body, etc.). Apply that feedback to
+\`${f_recon}\` / \`${f_notes}\` / \`${f_proposed}\` / \`${f_plan}\` when asked.
+
+Only after they explicitly say to post (for example "post", "approve", "ship
+it"), follow the post procedure below. Silence is not approval. If \`${f_plan}\`
+already matches the approved comments, skip rebuilding it and post that file.
+
+$(default_post_instructions "$id" "$f_recon" "$f_plan" "$f_posted" "$helper")
 EOF
 }
 
@@ -1314,6 +1872,18 @@ init_worktree_path() {
   return 1
 }
 
+# Drop write bits on a PR checkout so agents cannot edit reviewed code. Directories
+# keep traverse (+X). The work-item folder above stays writable for findings.
+lock_checkout_readonly() {
+  local path="$1"
+  [[ -d "$path" ]] || return 0
+  if chmod -R a-w,a+rX "$path" 2>/dev/null; then
+    echo "-> lock:   read-only ${path}"
+  else
+    echo "WARNING: could not chmod read-only: ${path}" >&2
+  fi
+}
+
 new_review_worktree() {   # $1 = index into the P_* arrays
   local i="$1" src head base actual
   if [[ -e "${P_PATH[$i]}/.git" ]]; then
@@ -1321,7 +1891,10 @@ new_review_worktree() {   # $1 = index into the P_* arrays
     head="$(resolve_commit "${P_PATH[$i]}" HEAD || true)"
     P_HEAD[$i]="$head"
     P_BASE[$i]="$(resolve_commit "${SRC_ROOT}/${P_REPODIR[$i]}" "${P_BASESHA[$i]}" 2>/dev/null || true)"
-    [[ -n "$head" ]] && P_OK[$i]=1
+    if [[ -n "$head" ]]; then
+      P_OK[$i]=1
+      lock_checkout_readonly "${P_PATH[$i]}"
+    fi
     SKIPPED=$((SKIPPED + 1))
     return 0
   fi
@@ -1371,6 +1944,7 @@ new_review_worktree() {   # $1 = index into the P_* arrays
   P_BASE[$i]="$base"
   P_OK[$i]=1
   CREATED=$((CREATED + 1))
+  lock_checkout_readonly "${P_PATH[$i]}"
 }
 
 for i in "${!P_ID[@]}"; do
@@ -1414,14 +1988,51 @@ write_pr_index || echo "WARNING: could not write the PR index" >&2
 context_path()              { printf '%s' "${ITEM_DIR}/review-${ID}-context.md"; }
 item_notes_path()           { printf '%s' "${ITEM_DIR}/review-${ID}-notes.txt"; }
 pr_notes_path()             { printf '%s' "${ITEM_DIR}/review-${ID}-${P_FOLDER[$1]}-notes.txt"; }
+repos_list_path()           { printf '%s' "${ITEM_DIR}/review-${ID}-repos.txt"; }
 reviewer_prompt_path()      { printf '%s' "${ITEM_DIR}/review-${ID}-reviewer-prompt.md"; }
 orchestrator_prompt_path()  { printf '%s' "${ITEM_DIR}/review-${ID}-orchestrator-prompt.md"; }
 findings_claude_path()      { printf '%s' "${ITEM_DIR}/review-${ID}-findings-claude.md"; }
 findings_cursor_path()      { printf '%s' "${ITEM_DIR}/review-${ID}-findings-cursor.md"; }
+cross_claude_path()         { printf '%s' "${ITEM_DIR}/review-${ID}-cross-claude.md"; }
+cross_cursor_path()         { printf '%s' "${ITEM_DIR}/review-${ID}-cross-cursor.md"; }
+cross_claude_prompt_path()  { printf '%s' "${ITEM_DIR}/review-${ID}-cross-claude-prompt.md"; }
+cross_cursor_prompt_path()  { printf '%s' "${ITEM_DIR}/review-${ID}-cross-cursor-prompt.md"; }
 reconciled_path()           { printf '%s' "${ITEM_DIR}/review-${ID}-reconciled.md"; }
+# Retired: outcome lives in notes.txt. Kept only so seed can delete stale files.
 summary_path()              { printf '%s' "${ITEM_DIR}/review-${ID}-summary.md"; }
 complete_marker_path()      { printf '%s' "${ITEM_DIR}/review-${ID}-complete.json"; }
 fixes_html_path()           { printf '%s' "${ITEM_DIR}/review-${ID}-fixes.html"; }
+post_plan_path()            { printf '%s' "${ITEM_DIR}/review-${ID}-post-plan.json"; }
+proposed_comments_path()    { printf '%s' "${ITEM_DIR}/review-${ID}-proposed-comments.md"; }
+posted_marker_path()        { printf '%s' "${ITEM_DIR}/review-${ID}-posted.json"; }
+
+# Prefer the ~/bin shim; fall back to this script's directory (dev / pre-install).
+review_helper_path() {   # review_helper_path <basename>
+  # Split locals: in one `local a="$1" b="$a"` line, bash sees b's $a as empty.
+  local name="$1"
+  local p="${HOME}/bin/${name}"
+  [[ -n "$name" && ( -x "$p" || -f "$p" ) ]] && { printf '%s' "$p"; return 0; }
+  p="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/${name}"
+  printf '%s' "$p"
+}
+review_post_helper() {
+  review_helper_path review-post-comments.sh
+}
+review_pipeline_helper() {
+  review_helper_path review-pipeline.sh
+}
+
+review_goose_recipe() {
+  # Goose fails on a ~/bin symlink ("Too many levels of symbolic links"); pass
+  # the real file next to this script (or whatever review_helper_path resolves to).
+  local p real
+  p="$(review_helper_path review-goose.yaml)"
+  if real="$(readlink -f "$p" 2>/dev/null)" && [[ -f "$real" ]]; then
+    printf '%s' "$real"
+    return 0
+  fi
+  printf '%s' "$p"
+}
 
 new_empty_file() { [[ -e "$1" ]] || : > "$1"; }
 
@@ -1455,6 +2066,101 @@ new_notes_file() {
   mv -f "$tmp" "$path"
 }
 
+# Pull one ### section from DESCRIPTION (built from the Azure work item fields).
+desc_section() {  # desc_section <heading> <max-chars>
+  local heading="$1" max="$2" block
+  grep -qF "### ${heading}" <<<"$DESCRIPTION" || return 0
+  block="$(sed -n "/### ${heading}/,/^### /{/^### ${heading}/d;/^### /d;p;}" \
+    <<<"$DESCRIPTION" | sed '/^[[:space:]]*$/d' | limit_text "$max")"
+  [[ -n "$block" ]] || return 0
+  printf '%s' "$block"
+}
+
+# STE100 story summary at review create time. Uses the work item description
+# fields, acceptance criteria, repro/system info, and discussion comments
+# already fetched from Azure DevOps. Idempotent on re-run.
+# Marker: exact heading "## Story summary"
+append_story_summary_to_notes() {
+  local path="$1" i prs="" why="" ac="" repro="" sysinfo="" discuss=""
+  [[ -f "$path" ]] || new_empty_file "$path"
+  if grep -qxF '## Story summary' "$path" 2>/dev/null; then
+    return 0
+  fi
+
+  why="$(desc_section 'Description' 2000)"
+  ac="$(desc_section 'Acceptance criteria' 1500)"
+  repro="$(desc_section 'Repro steps' 800)"
+  sysinfo="$(desc_section 'System info' 600)"
+  # Fallback when fields were not split into ### headings.
+  if [[ -z "$why$ac$repro$sysinfo" ]]; then
+    why="$(printf '%s' "$DESCRIPTION" | limit_text 2000)"
+  fi
+
+  # Condense work-item comments (already HTML-flattened into COMMENTS).
+  if [[ -n "${COMMENTS:-}" && "$COMMENTS" != '_(no comments on the work item)_' ]]; then
+    discuss="$(printf '%s' "$COMMENTS" | limit_text 2000)"
+  fi
+
+  for i in "${!P_ID[@]}"; do
+    (( P_OK[i] )) || continue
+    prs+="- PR ${P_ID[$i]} (${P_AZREPO[$i]}, ${P_STATUS[$i]:-unknown}): ${P_TITLE[$i]:-}"$'\n'
+  done
+  [[ -n "$prs" ]] || prs='- (none)'$'\n'
+
+  {
+    printf '\n## Story summary\n\n'
+    printf 'Work item %s is a %s in state %s.\n' "$ID" "${ITEM_TYPE:-item}" "${STATE:-unknown}"
+    printf 'Title: %s\n' "${TITLE:-"(no title)"}"
+    printf 'Assigned to: %s\n' "${ASSIGNED_TO:-(nobody)}"
+    printf 'Project: %s\n\n' "${PROJECT:-(unknown)}"
+
+    if [[ -n "$why" ]]; then
+      printf 'Description (from the work item):\n%s\n\n' "$why"
+    fi
+    if [[ -n "$ac" ]]; then
+      printf 'Acceptance criteria (from the work item):\n%s\n\n' "$ac"
+    fi
+    if [[ -n "$repro" ]]; then
+      printf 'Repro steps (from the work item):\n%s\n\n' "$repro"
+    fi
+    if [[ -n "$sysinfo" ]]; then
+      printf 'System info (from the work item):\n%s\n\n' "$sysinfo"
+    fi
+    if [[ -n "$discuss" ]]; then
+      printf 'Discussion comments (from the work item'
+      (( COMMENT_COUNT > 0 )) && printf ', %s shown' "$COMMENT_COUNT"
+      printf '):\n%s\n\n' "$discuss"
+    else
+      printf 'Discussion comments: none on the work item.\n\n'
+    fi
+
+    printf 'Pull requests under review:\n%s' "$prs"
+    printf '\n(End of story summary. Scratch notes and review outcome go below.)\n'
+  } >> "$path"
+  echo "-> notes:   appended STE100 story summary (description + comments)"
+}
+
+# Goose: one text file listing every PR checkout (no per-repo herdr workspace).
+write_goose_repos_list() {
+  local path i
+  path="$(repos_list_path)"
+  {
+    printf 'Repos under review — work item %s\n' "$ID"
+    printf '(git checkouts are on disk; this tab replaces per-repo herdr rows)\n\n'
+    for i in "${!P_ID[@]}"; do
+      (( P_OK[i] )) || continue
+      printf 'PR %s — %s\n' "${P_ID[$i]}" "${P_TITLE[$i]:-}"
+      printf '  folder:   %s\n' "${P_FOLDER[$i]}"
+      printf '  repo:     %s\n' "${P_AZREPO[$i]}"
+      printf '  status:   %s\n' "${P_STATUS[$i]:-}"
+      printf '  checkout: %s\n' "${P_PATH[$i]}"
+      [[ -n "${P_URL[$i]:-}" ]] && printf '  pr url:   %s\n' "${P_URL[$i]}"
+      printf '\n'
+    done
+  } > "$path"
+  echo "-> repos:   ${path}"
+}
+
 # How to see the change. Written into the prompt so the agent does not have to
 # guess at ref names that may no longer exist on the server.
 #
@@ -1468,21 +2174,23 @@ new_notes_file() {
 # from. So: use the real merge base when git can find one, otherwise compare the
 # two trees directly and say that is what is happening.
 diff_block() {   # $1 = index
-  local i="$1" head merge_base from base
+  local i="$1" head merge_base from base gc path
+  path="${P_PATH[$i]}"
+  gc="git -C $(sh_quote "$path")"
   if [[ -z "${P_BASE[$i]}" || -z "${P_HEAD[$i]}" ]]; then
-    echo '    git show HEAD          # base commit unavailable - review the checkout as it stands'
+    echo "    ${gc} show HEAD          # base commit unavailable - review the checkout as it stands"
     return 0
   fi
   head="$(short_sha "${P_HEAD[$i]}")"
   merge_base=""
-  if [[ -e "${P_PATH[$i]}/.git" ]]; then
-    merge_base="$(git -C "${P_PATH[$i]}" merge-base "${P_BASE[$i]}" "${P_HEAD[$i]}" 2>/dev/null || true)"
+  if [[ -e "${path}/.git" ]]; then
+    merge_base="$(git -C "$path" merge-base "${P_BASE[$i]}" "${P_HEAD[$i]}" 2>/dev/null || true)"
   fi
   if [[ -n "$merge_base" ]]; then
     from="$(short_sha "$merge_base")"
-    echo "    git diff ${from} ${head}          # the change"
-    echo "    git diff --stat ${from} ${head}   # which files"
-    echo "    git log --oneline ${from}..${head}  # its commits"
+    echo "    ${gc} diff --stat ${from} ${head}   # which files"
+    echo "    ${gc} diff ${from} ${head}          # the change"
+    echo "    ${gc} log --oneline ${from}..${head}  # its commits"
     if [[ "$merge_base" != "${P_BASE[$i]}" ]]; then
       echo ''
       echo "    (${from} is the merge base of the target ($(short_sha "${P_BASE[$i]}")) and this"
@@ -1490,9 +2198,9 @@ diff_block() {   # $1 = index
     fi
   else
     base="$(short_sha "${P_BASE[$i]}")"
-    echo "    git diff ${base} ${head}          # the change"
-    echo "    git diff --stat ${base} ${head}   # which files"
-    echo "    git log --oneline ${base}..${head}  # its commits"
+    echo "    ${gc} diff --stat ${base} ${head}   # which files"
+    echo "    ${gc} diff ${base} ${head}          # the change"
+    echo "    ${gc} log --oneline ${base}..${head}  # its commits"
     echo ''
     echo "    (no merge base between ${base} and ${head} is available locally, so these"
     echo '     compare the two trees directly against the merge target rather than'
@@ -1520,7 +2228,7 @@ pr_context_section() {   # $1 = index
 | base | ${base} |
 | checkout | ${P_PATH[$i]} (detached HEAD) |
 
-Commands, run from the checkout:
+Commands (use \`git -C\`; do not \`cd\` into the checkout first):
 
 $(diff_block "$i")
 EOF
@@ -1566,11 +2274,11 @@ EOF
   printf '%s' "$path"
 }
 
-# Shared reviewer prompt (both Claude and Cursor). Writes the file; sets REVIEWER_PROMPT_BODY.
+# Shared reviewer prompt (both reviewers). Writes the file; sets REVIEWER_PROMPT_BODY.
 REVIEWER_PROMPT_BODY=""
 build_reviewer_prompt() {   # build_reviewer_prompt <repo-dir> <context-text> <out-path>
-  local repo_dir="$1" context="$2" out="$3" prompt_file instructions scope
-  local fc fp_claude fp_cursor
+  local repo_dir="$1" context="$2" out="$3" prompt_file instructions scope paths mono_block
+  local fc fp_cursor
   fc="$(findings_claude_path)"
   fp_cursor="$(findings_cursor_path)"
   scope="work item ${ID} - dual adversarial review"
@@ -1587,46 +2295,100 @@ build_reviewer_prompt() {   # build_reviewer_prompt <repo-dir> <context-text> <o
       echo '-> prompt:  no review prompt in .claude - using built-in adversarial review'
     fi
   fi
-  REVIEWER_PROMPT_BODY="$(reviewer_constraint_block "$fc")"$'\n\n'"${instructions}"$'\n\n'\
-"## Reviewer output paths (orchestrator reads these)"$'\n\n'\
-"* Claude Opus Reviewer tab: \`${fc}\`"$'\n'\
+  if [[ "$REVIEW_PIPELINE" == "goose" ]]; then
+    paths="* Claude Opus Reviewer pane: \`${fc}\`"$'\n'\
+"* Cursor Auto Reviewer pane: \`${fp_cursor}\`"$'\n\n'\
+"$(cursor_reviewer_extra "$fp_cursor")"
+  else
+    paths="* Claude Opus Reviewer tab: \`${fc}\`"$'\n'\
 "* Cursor Auto Reviewer tab: \`${fp_cursor}\`"$'\n\n'\
-"$(cursor_reviewer_extra "$fp_cursor")"$'\n\n'\
+"$(cursor_reviewer_extra "$fp_cursor")"
+  fi
+  mono_block="$(monorepo_dual_review_block || true)"
+  [[ -n "$mono_block" ]] && echo "-> prompt:  Monorepo standards + adversarial for matching PRs"
+  REVIEWER_PROMPT_BODY="$(reviewer_constraint_block "$fc")"$'\n\n'"${instructions}"
+  [[ -n "$mono_block" ]] && REVIEWER_PROMPT_BODY+=$'\n\n'"${mono_block}"
+  REVIEWER_PROMPT_BODY+=$'\n\n'"$(multi_repo_reviewer_block)"$'\n\n'\
+"## Reviewer output paths (orchestrator reads these)"$'\n\n'\
+"${paths}"$'\n\n'\
 "## Context: ${scope}"$'\n\n'"${context}"
   printf '%s\n' "$REVIEWER_PROMPT_BODY" > "$out"
+}
+
+build_cross_prompts() {   # build_cross_prompts (no-op unless both reviewers enabled)
+  local fc fcu xc xu pc pu label_a label_b
+  dual_reviewers || { echo "-> prompt:  cross-review skipped (single reviewer)"; return 0; }
+  fc="$(findings_claude_path)"
+  fcu="$(findings_cursor_path)"
+  xc="$(cross_claude_path)"
+  xu="$(cross_cursor_path)"
+  pc="$(cross_claude_prompt_path)"
+  pu="$(cross_cursor_prompt_path)"
+  label_a="Claude"
+  label_b="Cursor"
+  {
+    reviewer_constraint_block "$xc"
+    echo
+    default_cross_instructions "$ID" "$fc" "$fcu" "$xc" "$label_a" "$label_b"
+    echo
+    echo "## Context: work item ${ID} (cross-review pass)"
+  } > "$pc"
+  {
+    reviewer_constraint_block "$xu"
+    echo
+    default_cross_instructions "$ID" "$fcu" "$fc" "$xu" "$label_b" "$label_a"
+    echo
+    cursor_reviewer_extra "$xu"
+    echo
+    echo "## Context: work item ${ID} (cross-review pass)"
+  } > "$pu"
+  echo "-> prompt:  cross-review prompts"
 }
 
 ORCHESTRATOR_PROMPT_BODY=""
 build_orchestrator_prompt() {   # build_orchestrator_prompt <context-text> <out-path>
   local context="$1" out="$2" instructions
-  local fc fcu fre fsum fdone fhtml
+  local fc fcu xc xu fre fnotes fdone fhtml fplan fposted fproposed helper
   fc="$(findings_claude_path)"
   fcu="$(findings_cursor_path)"
+  xc="$(cross_claude_path)"
+  xu="$(cross_cursor_path)"
   fre="$(reconciled_path)"
-  fsum="$(summary_path)"
+  fnotes="$(item_notes_path)"
   fdone="$(complete_marker_path)"
   fhtml="$(fixes_html_path)"
+  fplan="$(post_plan_path)"
+  fposted="$(posted_marker_path)"
+  fproposed="$(proposed_comments_path)"
+  helper="$(review_post_helper)"
   if [[ -n "$WT_REVIEW_ORCHESTRATOR_PROMPT" && -e "$WT_REVIEW_ORCHESTRATOR_PROMPT" ]]; then
     instructions="$(cat "$WT_REVIEW_ORCHESTRATOR_PROMPT")"
     echo "-> prompt:  orchestrator instructions from ${WT_REVIEW_ORCHESTRATOR_PROMPT}"
+    # Machine override replaces reconcile steps; still append the fixed post procedure.
+    instructions+=$'\n\n'"$(default_post_instructions "$ID" "$fre" "$fplan" "$fposted" "$helper")"
+  elif [[ "$REVIEW_PIPELINE" == "goose" ]]; then
+    instructions="$(default_goose_orchestrator_instructions "$ID" "$fc" "$fcu" "$xc" "$xu" \
+      "$fre" "$fnotes" "$fdone" "$fhtml" "$fplan" "$fposted" "$helper" "$fproposed")"
+    echo "-> prompt:  Goose reconcile (outcome in notes; proposed PR comments; manual post)"
   else
-    instructions="$(default_orchestrator_instructions "$ID" "$fc" "$fcu" "$fre" "$fsum" "$fdone" "$fhtml")"
+    instructions="$(default_orchestrator_instructions "$ID" "$fc" "$fcu" "$xc" "$xu" \
+      "$fre" "$fnotes" "$fdone" "$fhtml" "$fplan" "$fposted" "$helper")"
   fi
   ORCHESTRATOR_PROMPT_BODY="$(orchestrator_constraint_block "$ITEM_DIR")"$'\n\n'"${instructions}"$'\n\n'\
+"$(multi_repo_orchestrator_block)"$'\n\n'\
 "## Context: work item ${ID}"$'\n\n'"${context}"
   printf '%s\n' "$ORCHESTRATOR_PROMPT_BODY" > "$out"
 }
 
 seed_review_artifacts() {
-  local fc fcu fsum
-  fc="$(findings_claude_path)"
-  fcu="$(findings_cursor_path)"
-  fsum="$(summary_path)"
-  new_empty_file "$fc"
-  new_empty_file "$fcu"
-  if [[ ! -s "$fsum" ]]; then
-    printf '# Review summary (work item %s)\n\n_(orchestrator writes STE100 summary here)_\n' "$ID" > "$fsum"
+  (( REVIEW_ENABLE_CLAUDE )) && new_empty_file "$(findings_claude_path)"
+  (( REVIEW_ENABLE_CURSOR )) && new_empty_file "$(findings_cursor_path)"
+  if dual_reviewers; then
+    new_empty_file "$(cross_claude_path)"
+    new_empty_file "$(cross_cursor_path)"
   fi
+  # Outcome lives in notes.txt; drop any leftover Summary-tab file.
+  rm -f "$(summary_path)"
 }
 
 # Claude tab command, as ONE line.
@@ -1636,32 +2398,72 @@ seed_review_artifacts() {
 # execute line by line. The prompt therefore never appears inline: the shell
 # expands the file at run time, inside a single argument.
 #
-# --disallowed-tools takes a comma-separated list in ONE argument. Passing the
-# patterns as separate arguments would be worse than useless: the flag is
-# variadic, so it would swallow the prompt that follows it as another tool name.
-claude_command() {   # claude_command <model> <perm-mode> <prompt-body> <prompt-path>
-  local model="$1" perm="$2" body="$3" path="$4" joined lit
-  joined="$(IFS=,; echo "${REVIEW_DISALLOWED_TOOLS[*]}")"
-  lit="$(sh_quote "$path")"
-  printf 'claude --model %s --permission-mode %s --disallowed-tools %s ' \
-    "$model" "$perm" "$(sh_quote "$joined")"
-  if (( ${#body} <= PROMPT_MAX_CHARS )); then
-    printf '"$(cat %s)"' "$lit"
+# --allowed-tools / --disallowed-tools are VARIADIC (<tools...>). Without a `--`
+# terminator they swallow every following argv as more rules - including the
+# prompt. That produced "Deny rule in/full/and/…" when an oversize branch passed
+# a bare "Read <path> in full…" string after the flag. Always:
+#   1. pass each list as ONE comma-separated argument
+#   2. end options with `--`
+#   3. pass the prompt as `"$(cat <file>)"` (short command line; shell expands)
+# role: reviewer (default) | orchestrator — different allow/deny (post helper).
+claude_command() {   # claude_command <model> <perm-mode> <prompt-body> <prompt-path> [role]
+  local model="$1" perm="$2" path="$4" role="${5:-reviewer}" allow deny lit
+  if [[ "$role" == "orchestrator" ]]; then
+    allow="$(IFS=,; echo "${ORCHESTRATOR_ALLOWED_TOOLS[*]}")"
+    deny="$(IFS=,; echo "${ORCHESTRATOR_DISALLOWED_TOOLS[*]}")"
   else
-    sh_quote "Read ${path} in full and follow it exactly. It holds your instructions, hard constraints, and Azure DevOps context. Do not skip any part, and do not start until you have read all of it."
+    allow="$(IFS=,; echo "${REVIEW_ALLOWED_TOOLS[*]}")"
+    deny="$(IFS=,; echo "${REVIEW_DISALLOWED_TOOLS[*]}")"
   fi
+  lit="$(sh_quote "$path")"
+  printf 'claude --model %s --permission-mode %s --allowed-tools %s --disallowed-tools %s -- "$(cat %s)"' \
+    "$model" "$perm" "$(sh_quote "$allow")" "$(sh_quote "$deny")" "$lit"
 }
 
-# Cursor reviewer tab - ONE line. Same prompt file as Claude; role line prepended at run time.
-cursor_reviewer_command() {   # cursor_reviewer_command <prompt-body> <prompt-path> <findings-path>
-  local body="$1" path="$2" findings="$3" lit role
-  lit="$(sh_quote "$path")"
-  role="You are the Cursor Auto Reviewer. Write findings only to ${findings}."
-  if (( ${#body} <= PROMPT_MAX_CHARS )); then
-    printf '%s %s "$(cat %s)"' "$CURSOR_CMD" "$(sh_quote "$role")" "$lit"
-  else
-    printf '%s %s "$(cat %s)"' "$CURSOR_CMD" "$(sh_quote "${role} Read ${path} in full and follow it exactly.")" "$lit"
+# Orchestrator pane: one line (herdr types it into the pane).
+# classic → review-pipeline.sh; goose → goose run --recipe (Goose owns the pipeline).
+orchestrator_command() {
+  local recipe
+  if [[ "$REVIEW_PIPELINE" == "goose" ]]; then
+    recipe="$(review_goose_recipe)"
+    command -v goose >/dev/null 2>&1 || {
+      echo "goose not on PATH (run wsl/herdr/install.sh)" >&2
+      exit 1
+    }
+    # --no-session avoids a Goose sqlx sessions.db panic on some installs.
+    # -s stays interactive after stages for developer feedback / post.
+    # Rename this pane Goose (left); progress panes open to the right of it.
+    # Panes script reads WT_REVIEW_* for the Claude launcher; Cursor cmd is a Goose param.
+    printf 'herdr pane rename "${HERDR_PANE_ID}" Goose >/dev/null 2>&1 || true; WT_REVIEW_REVIEWER_MODEL=%s WT_REVIEW_PERMISSION_MODE=%s GOOSE_TELEMETRY_ENABLED=false GOOSE_TELEMETRY_OFF=1 goose run --no-session -s --recipe %s --params item_dir=%s --params work_item_id=%s --params cursor_cmd=%s' \
+      "$(sh_quote "$REVIEWER_MODEL")" \
+      "$(sh_quote "$REVIEWER_PERMISSION_MODE")" \
+      "$(sh_quote "$recipe")" \
+      "$(sh_quote "$ITEM_DIR")" \
+      "$(sh_quote "$ID")" \
+      "$(sh_quote "$CURSOR_CMD")"
+    return 0
   fi
+  printf 'WT_REVIEW_ORCHESTRATOR_MODEL=%s WT_REVIEW_REVIEWER_MODEL=%s WT_REVIEW_PERMISSION_MODE=%s WT_REVIEW_CURSOR_CMD=%s WT_REVIEW_ENABLE_CLAUDE=%s WT_REVIEW_ENABLE_CURSOR=%s %s %s %s' \
+    "$(sh_quote "$ORCHESTRATOR_MODEL")" \
+    "$(sh_quote "$REVIEWER_MODEL")" \
+    "$(sh_quote "$ORCHESTRATOR_PERMISSION_MODE")" \
+    "$(sh_quote "$CURSOR_CMD")" \
+    "$(sh_quote "$REVIEW_ENABLE_CLAUDE")" \
+    "$(sh_quote "$REVIEW_ENABLE_CURSOR")" \
+    "$(sh_quote "$(review_pipeline_helper)")" \
+    "$(sh_quote "$ITEM_DIR")" \
+    "$(sh_quote "$ID")"
+}
+
+# Cursor reviewer tab - ONE line. Same prompt file as Claude; role line prepended
+# at run time. `--` keeps flags from eating the prompt; role + file are two
+# prompt argv that agent concatenates.
+# Optional 4th arg: role label (default "Cursor Auto Reviewer").
+cursor_reviewer_command() {   # cursor_reviewer_command <prompt-body> <prompt-path> <findings-path> [role-label]
+  local path="$2" findings="$3" label="${4:-Cursor Auto Reviewer}" lit role
+  lit="$(sh_quote "$path")"
+  role="You are the ${label}. Write findings only to ${findings}."
+  printf '%s -- %s "$(cat %s)"' "$CURSOR_CMD" "$(sh_quote "$role")" "$lit"
 }
 
 # ---------------------------------------------------------------------------
@@ -1795,49 +2597,63 @@ initialize_review_tree() {
     if [[ -n "${P_REPOWEBURL[$i]:-}" ]]; then any_repo_web="${P_REPOWEBURL[$i]}"; break; fi
   done
   new_notes_file "$item_notes" "$(work_item_web_url "$any_repo_web" "$PROJECT" "$ID")"
+  append_story_summary_to_notes "$item_notes"
   first_repo=''
   for i in "${!P_ID[@]}"; do
     if (( P_OK[i] )); then first_repo="${P_PATH[$i]}"; break; fi
   done
+  require_reviewers_enabled
+  build_review_tabs
   reviewer_out="$(reviewer_prompt_path)"
   orch_out="$(orchestrator_prompt_path)"
   build_reviewer_prompt "$first_repo" "$context_text" "$reviewer_out"
+  build_cross_prompts
   build_orchestrator_prompt "$context_text" "$orch_out"
   seed_review_artifacts
-  f_cursor="$(findings_cursor_path)"
   # The label is the bare id, matching the folder, and NOT the work item title:
   # rows are matched on it, so a title edited in Azure DevOps would orphan the row
   # on the next run and create a duplicate beside it. update_tree_tokens supplies
   # the connector afterwards, once it knows how many reviews there are.
   if (( tree )); then item_label="$ID"; else item_label="${LABEL_INDENT}${ID}"; fi
   echo ''
-  echo "-> review: ${ID}"
+  echo "-> review: ${ID}  (pipeline=${REVIEW_PIPELINE} claude=${REVIEW_ENABLE_CLAUDE} cursor=${REVIEW_ENABLE_CURSOR})"
   cmds=()
-  cmds[Orchestrator]="$(claude_command "$ORCHESTRATOR_MODEL" "$ORCHESTRATOR_PERMISSION_MODE" \
-    "$ORCHESTRATOR_PROMPT_BODY" "$orch_out")"
-  cmds['Claude Opus Reviewer']="$(claude_command "$REVIEWER_MODEL" "$REVIEWER_PERMISSION_MODE" \
-    "$REVIEWER_PROMPT_BODY" "$reviewer_out")"
-  cmds['Cursor Auto Reviewer']="$(cursor_reviewer_command "$REVIEWER_PROMPT_BODY" "$reviewer_out" "$(findings_cursor_path)")"
+  if [[ "$REVIEW_PIPELINE" == "goose" ]]; then
+    write_goose_repos_list
+    cmds[Goose]="$(orchestrator_command)"
+    cmds[repos]="micro $(sh_quote "$(repos_list_path)")"
+  else
+    cmds[Orchestrator]="$(orchestrator_command)"
+    if (( REVIEW_ENABLE_CLAUDE )); then
+      cmds['Claude Opus Reviewer']="$(claude_command "$REVIEWER_MODEL" "$REVIEWER_PERMISSION_MODE" \
+        "$REVIEWER_PROMPT_BODY" "$reviewer_out" reviewer)"
+    fi
+    if (( REVIEW_ENABLE_CURSOR )); then
+      cmds['Cursor Auto Reviewer']="$(cursor_reviewer_command "$REVIEWER_PROMPT_BODY" "$reviewer_out" "$(findings_cursor_path)")"
+    fi
+  fi
   cmds[notes]="micro $(sh_quote "$item_notes")"
-  cmds[Summary]="micro $(sh_quote "$(summary_path)")"
   init_workspace "$ITEM_DIR" "$item_label" "$ID" REVIEW_TABS cmds
 
-  # --- one row per PR (notes only; review runs at the work-item row) ----
-  for i in "${!P_ID[@]}"; do
-    (( P_OK[i] )) || continue
-    notes="$(pr_notes_path "$i")"
-    new_notes_file "$notes" "${P_URL[$i]:-}"
-    if (( tree )); then
-      pr_label="${P_FOLDER[$i]}"
-    else
-      pr_label="${LABEL_INDENT}${LABEL_INDENT}${P_FOLDER[$i]}"
-    fi
-    echo ''
-    echo "-> pr:     ${P_FOLDER[$i]}"
-    cmds=()
-    cmds[notes]="micro $(sh_quote "$notes")"
-    init_workspace "${P_PATH[$i]}" "$pr_label" "${P_FOLDER[$i]}" PR_TABS cmds
-  done
+  # Classic: one sidebar row per PR (notes only). Goose: repos live in the
+  # repos tab text file — no per-repo herdr workspace.
+  if [[ "$REVIEW_PIPELINE" != "goose" ]]; then
+    for i in "${!P_ID[@]}"; do
+      (( P_OK[i] )) || continue
+      notes="$(pr_notes_path "$i")"
+      new_notes_file "$notes" "${P_URL[$i]:-}"
+      if (( tree )); then
+        pr_label="${P_FOLDER[$i]}"
+      else
+        pr_label="${LABEL_INDENT}${LABEL_INDENT}${P_FOLDER[$i]}"
+      fi
+      echo ''
+      echo "-> pr:     ${P_FOLDER[$i]}"
+      cmds=()
+      cmds[notes]="micro $(sh_quote "$notes")"
+      init_workspace "${P_PATH[$i]}" "$pr_label" "${P_FOLDER[$i]}" PR_TABS cmds
+    done
+  fi
 
   # Order first, then draw: the connectors are derived from sidebar position, so
   # they have to be computed after everything has landed where it belongs.

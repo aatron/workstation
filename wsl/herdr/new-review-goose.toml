@@ -1,0 +1,14 @@
+# Goose-orchestrated code-review launcher.
+# Installed by install.sh into herdr-plus quick-actions/.
+# Asks for the Azure DevOps WORK ITEM id (not the PR id) and opens a real herdr
+# tab, because the overlay cannot host the script's output.
+#
+# herdr prepares the review folder; one Orchestrator tab runs Goose, which
+# launches Claude + Cursor reviews and owns wait → cross → reconcile → manual post.
+name = "Review - Goose"
+description = "One Goose tab: Claude + Cursor review, cross-swap, reconcile; post is manual"
+type = "form"
+command = '"$HOME/bin/worktree-launch.sh" new-review-goose {{.WorkspaceId}} "{{.WorkDir}}" "{{.Value}}"'
+
+[form]
+prompt = "Work item id to review"

@@ -400,199 +400,101 @@ $OUT"
 check 'good repo created' "$([[ -e "$(story 99014 zz-missing aaa)/.git" ]] && echo 0 || echo 1)" 'aaa missing'
 
 echo
-echo '15. story topology: story row with four tabs, one repo row under it per repo'
+echo '15. one story workspace, repos.txt, no per-repo sidebar rows'
 reset_fixture; new_repo aaa main 1; new_repo bbb main 2
 run_make development WT_ID=99015 WT_SLUG=zz-topo WT_REPOS='aaa,bbb'
 STORY_DIR_15="$(dirname "$(story 99015 zz-topo aaa)")"
+REPOS_TXT_15="${STORY_DIR_15}/repos.txt"
 check 'exit 0' "$(ok "$RC" 0)" "rc=$RC
 $OUT"
 check 'both repos are folders inside the story' \
   "$([[ -e "$(story 99015 zz-topo aaa)/.git" && -e "$(story 99015 zz-topo bbb)/.git" ]] && echo 0 || echo 1)" \
   'a repo is missing'
+check 'repos.txt exists' "$([[ -f "$REPOS_TXT_15" ]] && echo 0 || echo 1)" "path=$REPOS_TXT_15"
+check 'repos.txt lists aaa then bbb' \
+  "$(ok "$(cat "$REPOS_TXT_15")" "$(printf 'aaa\nbbb\n')")" "content=$(cat "$REPOS_TXT_15" | od -c)"
 
 snapshot
-# The story row is rooted at the story folder itself, not at any repo in it.
 mapfile -t STORY15 < <(fixture_workspaces "$STORY_DIR_15" exact)
 check 'exactly one story workspace' "$(ok "${#STORY15[@]}" 1)" "count=${#STORY15[@]}
 $OUT"
 if (( ${#STORY15[@]} == 1 )); then
   check 'labeled {id}-{slug}' "$(ok "$(ws_label "${STORY15[0]}")" '99015-zz-topo')" \
     "label=$(ws_label "${STORY15[0]}")"
-  # The whole point: a workspace with worktree metadata gets nested under its
-  # primary clone, which is the repo-centric layout this replaced.
   check 'not nested under a repo (no worktree metadata)' \
     "$(ok "$(ws_field "${STORY15[0]}" '.worktree // "null"')" 'null')" 'it is a worktree workspace'
   check 'story has notes, claude, cursor and bash tabs' \
     "$(ok "$(tab_labels "${STORY15[0]}")" 'bash,claude,cursor,notes')" \
     "tabs=$(tab_labels "${STORY15[0]}")"
-  check 'story has no stray extra tab' "$(ok "$(tab_count "${STORY15[0]}")" 4)" \
+  check 'story has exactly four tabs' "$(ok "$(tab_count "${STORY15[0]}")" 4)" \
     "tabs=$(tab_labels "${STORY15[0]}")"
 fi
-
 for repo in aaa bbb; do
   mapfile -t ROW < <(fixture_workspaces "$(story 99015 zz-topo "$repo")" exact)
-  check "one workspace row for repo $repo" "$(ok "${#ROW[@]}" 1)" "count=${#ROW[@]}
-$OUT"
-  (( ${#ROW[@]} == 1 )) || continue
-  # No $tree row spec in this fixture, so the indent falls back into the label.
-  check "$repo row label is indented" "$(ok "$(ws_label "${ROW[0]}")" "  $repo")" \
-    "label=[$(ws_label "${ROW[0]}")]"
-  check "$repo row has notes, claude and bash tabs" \
-    "$(ok "$(tab_labels "${ROW[0]}")" 'bash,claude,notes')" "tabs=$(tab_labels "${ROW[0]}")"
-  check "$repo row has exactly three tabs" "$(ok "$(tab_count "${ROW[0]}")" 3)" \
-    "tabs=$(tab_labels "${ROW[0]}")"
+  check "no workspace row for repo $repo" "$(ok "${#ROW[@]}" 0)" "count=${#ROW[@]}"
 done
-
-# The repo rows have to sit directly under their story row - that adjacency is
-# the only thing making the indent read as nesting.
 mapfile -t ALL15 < <(fixture_workspaces "$STORY_DIR_15")
-check 'three rows in total (story + 2 repos)' "$(ok "${#ALL15[@]}" 3)" "count=${#ALL15[@]}"
-if (( ${#ALL15[@]} == 3 )); then
-  check 'story row first, then the repos in the order requested' \
-    "$(ok "$(labels_by_number "${ALL15[@]}")" '99015-zz-topo|  aaa|  bbb')" \
-    "order=$(labels_by_number "${ALL15[@]}")"
-  FIRST_N="$(ws_number "$(fixture_workspaces "$STORY_DIR_15" exact)")"
-  LAST_N="$(ws_number "$(fixture_workspaces "$(story 99015 zz-topo bbb)" exact)")"
-  check 'rows are consecutive (nothing wedged between them)' \
-    "$(ok "$((LAST_N - FIRST_N))" 2)" "numbers=$(numbers_sorted "${ALL15[@]}")"
-fi
+check 'only one sidebar row for the story' "$(ok "${#ALL15[@]}" 1)" "count=${#ALL15[@]}"
 check 'no per-repo worktree workspace was registered' \
   "$(ok "$(worktree_workspaces_under "$STORY_DIR_15")" 0)" 'a repo-level worktree workspace exists'
 
 echo
-echo '16. re-running the same story reuses every row (no duplicates)'
+echo '16. re-run reuses the story workspace (no duplicates)'
 run_make development WT_ID=99015 WT_SLUG=zz-topo WT_REPOS='aaa,bbb'
 snapshot
-mapfile -t ALL16 < <(fixture_workspaces "$STORY_DIR_15")
+mapfile -t ALL16 < <(fixture_workspaces "$STORY_DIR_15" exact)
 check 'exit 3 (nothing to do)' "$(ok "$RC" 3)" "rc=$RC
 $OUT"
-check 'still three rows' "$(ok "${#ALL16[@]}" 3)" "count=${#ALL16[@]}
+check 'still one story workspace' "$(ok "${#ALL16[@]}" 1)" "count=${#ALL16[@]}
 $OUT"
-check 'same workspace ids' \
-  "$(ok "$(printf '%s\n' "${ALL15[@]}" | sort | paste -sd, -)" \
-        "$(printf '%s\n' "${ALL16[@]}" | sort | paste -sd, -)")" \
-  "before=${ALL15[*]} after=${ALL16[*]}"
-check 'said it reused them' "$(ok "$(grep -c 'reusing workspace' <<<"$OUT")" 3)" "reuse lines
+check 'same workspace id' \
+  "$(ok "${ALL16[0]}" "${STORY15[0]}")" "before=${STORY15[0]} after=${ALL16[0]}"
+check 'said it reused the story workspace' "$(ok "$(grep -c 'reusing workspace' <<<"$OUT")" 1)" "reuse lines
 $OUT"
-check 'tab counts unchanged' \
-  "$([[ "$(tab_count "$(fixture_workspaces "$STORY_DIR_15" exact)")" == 4 &&
-        "$(tab_count "$(fixture_workspaces "$(story 99015 zz-topo aaa)" exact)")" == 3 ]] && echo 0 || echo 1)" \
-  'tab count changed'
+check 'story still has four tabs' \
+  "$(ok "$(tab_count "${ALL16[0]}")" 4)" "tabs=$(tab_labels "${ALL16[0]}")"
 
 echo
-echo '17. a repo added to an existing story gets its own row'
+echo '17. adding a repo updates repos.txt, still one story workspace'
 new_repo ccc main 1
-# A row created AFTER the story, so the story's block is no longer last in the
-# sidebar. herdr appends every new workspace to the end, so without this decoy
-# the new repo row would follow bbb by accident and the ordering checks below
-# would pass whether or not set_sidebar_order did anything.
-DECOY="$(herdr workspace create --cwd "$ROOT" --label 'zz-decoy' --no-focus 2>/dev/null \
-  | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null || true)"
-check 'a decoy row now sits below the story' "$([[ -n "$DECOY" ]] && echo 0 || echo 1)" 'could not create it'
 run_make development WT_ID=99015 WT_SLUG=zz-topo WT_REPOS='aaa,bbb,ccc'
 snapshot
-mapfile -t ALL17 < <(fixture_workspaces "$STORY_DIR_15")
+mapfile -t ALL17 < <(fixture_workspaces "$STORY_DIR_15" exact)
 check 'exit 0 (one repo created)' "$(ok "$RC" 0)" "rc=$RC
 $OUT"
-check 'four rows now' "$(ok "${#ALL17[@]}" 4)" "count=${#ALL17[@]}
+check 'repos.txt lists aaa, bbb, ccc' \
+  "$(ok "$(cat "$REPOS_TXT_15")" "$(printf 'aaa\nbbb\nccc\n')")" "content=$(cat "$REPOS_TXT_15" | od -c)"
+check 'still exactly one story workspace' "$(ok "${#ALL17[@]}" 1)" "count=${#ALL17[@]}
 $OUT"
 mapfile -t ROW_CCC < <(fixture_workspaces "$(story 99015 zz-topo ccc)" exact)
-check 'ccc has its own row' "$(ok "${#ROW_CCC[@]}" 1)" "count=${#ROW_CCC[@]}"
-if (( ${#ROW_CCC[@]} == 1 )); then
-  check 'ccc row has three tabs' "$(ok "$(tab_count "${ROW_CCC[0]}")" 3)" 'wrong tab count'
-fi
-if (( ${#ALL17[@]} == 4 )) && [[ -n "$DECOY" ]]; then
-  check 'the new repo row joined its story rather than the sidebar bottom' \
-    "$(ok "$(labels_by_number "${ALL17[@]}")" '99015-zz-topo|  aaa|  bbb|  ccc')" \
-    "order=$(labels_by_number "${ALL17[@]}")"
-  FIRST_N="$(ws_number "$(fixture_workspaces "$STORY_DIR_15" exact)")"
-  CCC_N="$(ws_number "${ROW_CCC[0]}")"
-  check 'the four rows are consecutive' "$(ok "$((CCC_N - FIRST_N))" 3)" \
-    "numbers=$(numbers_sorted "${ALL17[@]}")"
-  DECOY_N="$(ws_number "$DECOY")"
-  check 'and above the row that was created after the story' \
-    "$([[ -n "$DECOY_N" ]] && (( CCC_N < DECOY_N )) && echo 0 || echo 1)" \
-    "ccc at $CCC_N, decoy at $DECOY_N"
-fi
-[[ -n "$DECOY" ]] && herdr workspace close "$DECOY" >/dev/null 2>&1
-check 'prints the config hint when $tree is not configured' \
-  "$(grep -q '\[ui\.sidebar\.spaces\]' <<<"$OUT" && echo 0 || echo 1)" "no hint
-$OUT"
+check 'no sidebar row for ccc' "$(ok "${#ROW_CCC[@]}" 0)" "count=${#ROW_CCC[@]}"
+check 'ccc worktree exists on disk' \
+  "$([[ -e "$(story 99015 zz-topo ccc)/.git" ]] && echo 0 || echo 1)" 'ccc missing'
 
 echo
-echo '18. $tree token: connectors reported, labels un-indented, last repo gets the corner'
+echo '18. repos.txt stays in sync with tree config; still no per-repo rows'
 reset_fixture
 write_fixture_config tree
 new_repo aaa main 1; new_repo bbb main 1
 run_make development WT_ID=99018 WT_SLUG=zz-tree WT_REPOS='aaa,bbb'
 STORY_DIR_18="$(dirname "$(story 99018 zz-tree aaa)")"
+REPOS_TXT_18="${STORY_DIR_18}/repos.txt"
 check 'exit 0' "$(ok "$RC" 0)" "rc=$RC
 $OUT"
-check 'no config hint (it is configured)' \
-  "$(grep -q '\[ui\.sidebar\.spaces\]' <<<"$OUT" && echo 1 || echo 0)" "hint printed anyway
-$OUT"
-
-snapshot
+check 'repos.txt lists aaa then bbb' \
+  "$(ok "$(cat "$REPOS_TXT_18")" "$(printf 'aaa\nbbb\n')")" "content=$(cat "$REPOS_TXT_18" | od -c)"
 mapfile -t STORY18 < <(fixture_workspaces "$STORY_DIR_18" exact)
-check 'story row exists' "$(ok "${#STORY18[@]}" 1)" "count=${#STORY18[@]}"
-if (( ${#STORY18[@]} == 1 )); then
-  # The trunk carries no connector; an absent token renders as nothing, which is
-  # also why the story row shows no separator dot.
-  check 'story row has no tree token' "$(ok "$(ws_tree "${STORY18[0]}")" '')" \
-    "token=[$(ws_tree "${STORY18[0]}")]"
-fi
-mapfile -t ROW_A < <(fixture_workspaces "$(story 99018 zz-tree aaa)" exact)
-mapfile -t ROW_B < <(fixture_workspaces "$(story 99018 zz-tree bbb)" exact)
-check 'both repo rows exist' "$([[ ${#ROW_A[@]} -eq 1 && ${#ROW_B[@]} -eq 1 ]] && echo 0 || echo 1)" \
-  "a=${#ROW_A[@]} b=${#ROW_B[@]}"
-if [[ ${#ROW_A[@]} -eq 1 && ${#ROW_B[@]} -eq 1 ]]; then
-  check 'labels are the bare repo name (no label indent)' \
-    "$([[ "$(ws_label "${ROW_A[0]}")" == 'aaa' && "$(ws_label "${ROW_B[0]}")" == 'bbb' ]] && echo 0 || echo 1)" \
-    "a=[$(ws_label "${ROW_A[0]}")] b=[$(ws_label "${ROW_B[0]}")]"
-  check 'first repo gets the tee connector' "$(ok "$(ws_tree "${ROW_A[0]}")" "$BRANCH_CH")" \
-    "got=[$(ws_tree "${ROW_A[0]}")]"
-  check 'last repo gets the corner connector' "$(ok "$(ws_tree "${ROW_B[0]}")" "$LAST_CH")" \
-    "got=[$(ws_tree "${ROW_B[0]}")]"
-fi
-
-echo
-echo '18b. adding a repo moves the corner down to the new last one'
+check 'exactly one story workspace' "$(ok "${#STORY18[@]}" 1)" "count=${#STORY18[@]}"
+check 'no per-repo workspace rows' \
+  "$([[ $(fixture_workspaces "$(story 99018 zz-tree aaa)" exact | wc -l) -eq 0 &&
+      $(fixture_workspaces "$(story 99018 zz-tree bbb)" exact | wc -l) -eq 0 ]] && echo 0 || echo 1)" \
+  'a repo row exists'
 new_repo ccc main 1
 run_make development WT_ID=99018 WT_SLUG=zz-tree WT_REPOS='aaa,bbb,ccc'
-snapshot
-mapfile -t ROW_B < <(fixture_workspaces "$(story 99018 zz-tree bbb)" exact)
-mapfile -t ROW_C < <(fixture_workspaces "$(story 99018 zz-tree ccc)" exact)
-check 'exit 0' "$(ok "$RC" 0)" "rc=$RC
-$OUT"
-check 'bbb gave up the corner' \
-  "$([[ ${#ROW_B[@]} -eq 1 ]] && ok "$(ws_tree "${ROW_B[0]}")" "$BRANCH_CH" || echo 1)" \
-  "got=[${ROW_B[0]:-none}]"
-check 'ccc took it' \
-  "$([[ ${#ROW_C[@]} -eq 1 ]] && ok "$(ws_tree "${ROW_C[0]}")" "$LAST_CH" || echo 1)" \
-  "got=[${ROW_C[0]:-none}]"
-
-echo
-echo '18c. a row labelled by the label-era script is adopted, not duplicated'
-# For one release the connectors were drawn in the label. Such a row must be
-# recognised by its bare name and renamed, or a re-run would leave two rows for
-# the same repo sitting next to each other.
-if (( ${#ROW_C[@]} == 1 )); then
-  WAS_CCC="${ROW_C[0]}"
-  herdr workspace rename "$WAS_CCC" "$LAST_CH ccc" >/dev/null 2>&1
-  run_make development WT_ID=99018 WT_SLUG=zz-tree WT_REPOS='aaa,bbb,ccc'
-  snapshot
-  mapfile -t AFTER_C < <(fixture_workspaces "$(story 99018 zz-tree ccc)" exact)
-  check 'still exactly one row for ccc' "$(ok "${#AFTER_C[@]}" 1)" "count=${#AFTER_C[@]}
-$OUT"
-  if (( ${#AFTER_C[@]} == 1 )); then
-    check 'it kept the same workspace id' "$(ok "${AFTER_C[0]}" "$WAS_CCC")" \
-      "was $WAS_CCC now ${AFTER_C[0]}"
-    check 'and was renamed back to the bare name' "$(ok "$(ws_label "${AFTER_C[0]}")" 'ccc')" \
-      "label=[$(ws_label "${AFTER_C[0]}")]"
-  fi
-else
-  check 'ccc row available to rename' 1 "count=${#ROW_C[@]}"
-fi
+check 'repos.txt updated to three lines' \
+  "$(ok "$(cat "$REPOS_TXT_18")" "$(printf 'aaa\nbbb\nccc\n')")" "content=$(cat "$REPOS_TXT_18" | od -c)"
+mapfile -t STORY18B < <(fixture_workspaces "$STORY_DIR_18" exact)
+check 'still one story workspace after adding ccc' "$(ok "${#STORY18B[@]}" 1)" "count=${#STORY18B[@]}"
 
 # ---------------------------------------------------------------------------
 # Cleanup order matters, and one pass is not enough. herdr keeps a workspace for

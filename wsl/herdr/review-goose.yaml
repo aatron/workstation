@@ -1,0 +1,132 @@
+# Goose owns Review - Goose. Left pane = Goose only. Every agent stage opens
+# interactive progress panes on the RIGHT (Claude+Cursor → cross → reconcile).
+version: 1.0.0
+title: Review Goose Pipeline
+description: Claude + Cursor review via Goose with herdr progress panes; post is manual
+
+parameters:
+  - key: item_dir
+    input_type: string
+    requirement: required
+    description: Absolute path to the review work-item folder
+  - key: work_item_id
+    input_type: string
+    requirement: required
+    description: Azure DevOps work item id
+  - key: cursor_cmd
+    input_type: string
+    requirement: optional
+    default: "agent --trust --approve-mcps --sandbox enabled --force"
+    description: Cursor Agent CLI prefix (interactive TUI in herdr panes; never -p)
+
+extensions:
+  - type: builtin
+    name: developer
+
+settings:
+  max_turns: 100
+
+instructions: |
+  You are the Goose review **orchestrator** for work item {{ work_item_id }}.
+  You drive every stage. Do NOT re-review PR checkouts yourself. Do NOT run
+  `agent` / `claude` yourself on the left — every agent stage uses right-hand panes.
+
+  ## Layout (herdr)
+
+  * LEFT pane = you (Goose). Orchestrate only: open panes, wait, show results.
+  * Progress panes always open to the RIGHT via `$HOME/bin/review-goose-panes.sh`.
+  * Reviewers/cross: Claude (top) + Cursor (bottom). Reconcile: Cursor.
+  * `open` replaces the previous progress panes. Do not close after wait — the
+    next `open` closes the prior set. After reconcile, leave the pane open.
+  * `HERDR_PANE_ID` must be set (herdr sets it in this Goose tab). If missing, stop
+    and tell the developer to re-run Review - Goose from herdr.
+
+  Helpers:
+  * Panes: `$HOME/bin/review-goose-panes.sh`
+  * Wait: `$HOME/bin/review-wait-ready.sh`
+  * Cursor CLI prefix: {{ cursor_cmd }}
+  * Claude model/perm: `WT_REVIEW_REVIEWER_MODEL` / `WT_REVIEW_PERMISSION_MODE` (env)
+
+  ## Hard rules
+
+  * Do not edit PR checkouts.
+  * Do not invent stages.
+  * Do not write to Azure DevOps until the developer explicitly asks to post
+    after feedback (see the orchestrator prompt).
+  * Prefer the pane helper and wait helper — do not hand-roll herdr splits or
+    sleep loops.
+  * Never pass `-p` / `--print` to Cursor. Panes must show the live TUI.
+
+  ## Stage 0 — Open reviewer progress panes and start reviews
+
+  ```bash
+  "$HOME/bin/review-goose-panes.sh" open reviewers \
+    "{{ item_dir }}" "{{ work_item_id }}" {{ cursor_cmd }}
+  ```
+
+  Opens Claude (top-right) and Cursor (bottom-right) so the developer can watch.
+  For FCTG Monorepo PRs, each pane must run standards-review and adversarial-review
+  (see the shared reviewer prompt).
+
+  ## Stage 1 — Wait for findings (leave panes open)
+
+  ```bash
+  "$HOME/bin/review-wait-ready.sh" --marker 'Verified sound' --min-bytes 100 \
+    "{{ item_dir }}/review-{{ work_item_id }}-findings-claude.md" \
+    "{{ item_dir }}/review-{{ work_item_id }}-findings-cursor.md"
+  ```
+
+  On wait timeout: leave panes open, show wait output, stop.
+
+  ## Stage 2 — Open cross-review progress panes
+
+  ```bash
+  "$HOME/bin/review-goose-panes.sh" open cross \
+    "{{ item_dir }}" "{{ work_item_id }}" {{ cursor_cmd }}
+  ```
+
+  ## Stage 3 — Wait for cross-review (leave panes open)
+
+  ```bash
+  "$HOME/bin/review-wait-ready.sh" --marker '## Cross-review complete' --min-bytes 80 \
+    "{{ item_dir }}/review-{{ work_item_id }}-cross-claude.md" \
+    "{{ item_dir }}/review-{{ work_item_id }}-cross-cursor.md"
+  ```
+
+  On wait timeout: leave panes open, stop.
+
+  ## Stage 4 — Open reconcile progress pane
+
+  ```bash
+  "$HOME/bin/review-goose-panes.sh" open reconcile \
+    "{{ item_dir }}" "{{ work_item_id }}" {{ cursor_cmd }}
+  ```
+
+  Reconcile runs in the right-hand pane. You do not reconcile on the left.
+
+  ## Stage 5 — Wait for done marker, then show proposed comments
+
+  ```bash
+  "$HOME/bin/review-wait-ready.sh" --marker '"pipeline": "goose"' --min-bytes 40 \
+    "{{ item_dir }}/review-{{ work_item_id }}-complete.json"
+  ```
+
+  Then read and show the developer (do not shorten):
+
+  1. The `## Review outcome` section in
+     `{{ item_dir }}/review-{{ work_item_id }}-notes.txt`
+  2. The `## Disagrees on` section of
+     `{{ item_dir }}/review-{{ work_item_id }}-reconciled.md`
+     (substance only — no severity-only rows)
+  3. The full
+     `{{ item_dir }}/review-{{ work_item_id }}-proposed-comments.md`
+     grouped by PR, with category (higher on severity disagreement) and full body
+
+  Leave the Reconcile pane open. Do NOT post yet — wait for feedback, then post
+  only when they explicitly ask (orchestrator prompt / draft post-plan).
+
+  Stay available for feedback after the done marker.
+
+prompt: |
+  Run the Goose review for work item {{ work_item_id }} in {{ item_dir }}.
+  Stages 0→5. Claude+Cursor panes on the right; keep Goose on the left.

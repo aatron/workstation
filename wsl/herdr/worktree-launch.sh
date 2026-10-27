@@ -10,6 +10,7 @@
 #   worktree-launch.sh development [ws] [cwd]                                    -> make-worktree.sh development
 #   worktree-launch.sh remove [ws] [cwd] [story-id]                              -> worktree-remove.sh
 #   worktree-launch.sh new-review [ws] [cwd] [work-item-id]                      -> review-make.sh <id>
+#   worktree-launch.sh new-review-goose [ws] [cwd] [work-item-id]                -> review-make.sh (Goose pipeline)
 #   worktree-launch.sh remove-review [ws] [cwd] [work-item-id|empty]             -> review-remove.sh [<id>]
 #   worktree-launch.sh reap [ws] [cwd]                                           -> story-reap.sh
 #   worktree-launch.sh az-sync [ws] [cwd]                                        -> az-watcher run
@@ -29,6 +30,8 @@ ACTION="${1:-}"
 WS="${2:-}"
 CWD="${3:-}"
 STORY_ID="${4:-}"
+# Extra env for the pane command (Goose review sets WT_REVIEW_PIPELINE).
+PANE_ENV=""
 
 case "$ACTION" in
   development)         SCRIPT="${HOME}/bin/make-worktree.sh"; RUN_ARGS="$ACTION"; label="New Dev Worktree" ;;
@@ -36,10 +39,15 @@ case "$ACTION" in
   new-review)
     [[ -n "$STORY_ID" ]] || { echo "new-review needs the Azure DevOps work item id" >&2; exit 1; }
     SCRIPT="${HOME}/bin/review-make.sh"; RUN_ARGS="$STORY_ID"; label="Review ${STORY_ID}" ;;
+  new-review-goose)
+    [[ -n "$STORY_ID" ]] || { echo "new-review-goose needs the Azure DevOps work item id" >&2; exit 1; }
+    SCRIPT="${HOME}/bin/review-make.sh"; RUN_ARGS="$STORY_ID"; label="Review Goose ${STORY_ID}"
+    PANE_ENV="WT_REVIEW_PIPELINE=goose " ;;
   remove-review)
-    # An empty id is meaningful here: it means "examine every review".
+    # No id: interactive multi-select (or --yes scan when automation passes it).
+    # Optional id still supported for one-shot CLI use.
     SCRIPT="${HOME}/bin/review-remove.sh"; RUN_ARGS="$STORY_ID"
-    if [[ -n "$STORY_ID" ]]; then label="Clean Up Review ${STORY_ID}"; else label="Clean Up Reviews"; fi ;;
+    if [[ -n "$STORY_ID" ]]; then label="Review - Delete ${STORY_ID}"; else label="Review - Delete"; fi ;;
   # No args: the script finds the finished stories itself and asks before it
   # deletes anything. A scheduled run passes --yes instead, and never comes
   # through here.
@@ -47,7 +55,7 @@ case "$ACTION" in
   # az-watcher is non-interactive; the tab just makes its log visible.
   az-sync)             SCRIPT="${HOME}/bin/az-watcher"; RUN_ARGS="run"; label="Sync Azure Reviews" ;;
   *)
-    echo "usage: $0 <development|new-review|remove-review|remove|reap|az-sync> [workspace_id] [cwd] [story-or-work-item-id]" >&2
+    echo "usage: $0 <development|new-review|new-review-goose|remove-review|remove|reap|az-sync> [workspace_id] [cwd] [story-or-work-item-id]" >&2
     exit 1 ;;
 esac
 
@@ -61,10 +69,10 @@ need jq
 # Symlinks to a non-executable target fail with "Permission denied" and herdr-plus
 # swallows stderr — the form just closes. Prefer +x; fall back to bash.
 if [[ -x "$SCRIPT" ]]; then
-  PANE_CMD="${SCRIPT}${RUN_ARGS:+ ${RUN_ARGS}}"
+  PANE_CMD="${PANE_ENV}${SCRIPT}${RUN_ARGS:+ ${RUN_ARGS}}"
 else
   echo "WARNING: $SCRIPT is not executable; running via bash (chmod +x or re-run install.sh)" >&2
-  PANE_CMD="bash ${SCRIPT}${RUN_ARGS:+ ${RUN_ARGS}}"
+  PANE_CMD="${PANE_ENV}bash ${SCRIPT}${RUN_ARGS:+ ${RUN_ARGS}}"
 fi
 
 args=(tab create --label "$label" --focus)

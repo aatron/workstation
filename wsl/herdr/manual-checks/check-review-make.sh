@@ -325,6 +325,16 @@ check 'names the Claude findings path' \
   "$(yes grep -qF 'review-23660-findings-claude.md' <<<"$PROMPT")" 'no claude findings path'
 check 'DevOps context is appended after the instructions' \
   "$(yes grep -qF '## Context: work item 23660 - dual adversarial review' <<<"$PROMPT")" 'no context section'
+check 'multi-PR reviews stay in one session (no subagents)' \
+  "$(yes grep -qF 'Do not spawn subagents' <<<"$PROMPT")" 'still tells the model to spawn agents'
+check 'multi-PR reviews include a cross-repo pass' \
+  "$(yes grep -qF 'Cross-repo interaction' <<<"$PROMPT")" 'no cross-repo section'
+check 'multi-PR reviews forbid cd into checkouts' \
+  "$(yes grep -qF 'Never `cd` into the checkout' <<<"$PROMPT")" 'no git -C / no-cd rule in multi-PR block'
+check 'findings require PR id' \
+  "$(yes grep -qF '**PR**' <<<"$PROMPT")" 'no PR field in findings shape'
+check 'findings require category' \
+  "$(yes grep -qF '**category**' <<<"$PROMPT")" 'no category field in findings shape'
 
 echo
 echo '2c2. the orchestrator prompt'
@@ -332,11 +342,23 @@ ORCH_FILE="$ITEM/review-23660-orchestrator-prompt.md"
 check 'orchestrator waits for both reviewer files' \
   "$([[ -f "$ORCH_FILE" ]] && grep -qF 'review-23660-findings-claude.md' "$ORCH_FILE" \
     && grep -qF 'review-23660-findings-cursor.md' "$ORCH_FILE" && echo 0 || echo 1)" 'missing findings paths'
+check 'orchestrator is reconcile-only (pipeline did stages 1-3)' \
+  "$([[ -f "$ORCH_FILE" ]] && grep -qF 'review-pipeline.sh already ran' "$ORCH_FILE" \
+    && grep -qF 'cross-claude' "$ORCH_FILE" && echo 0 || echo 1)" 'still asks Claude to wait or shuttle'
 check 'orchestrator writes reconciled and complete marker' \
   "$([[ -f "$ORCH_FILE" ]] && grep -qF 'review-23660-reconciled.md' "$ORCH_FILE" \
     && grep -qF 'review-23660-complete.json' "$ORCH_FILE" && echo 0 || echo 1)" 'missing output paths'
 check 'orchestrator does not call ntfy' \
   "$([[ -f "$ORCH_FILE" ]] && grep -qF 'Do NOT call ntfy' "$ORCH_FILE" && echo 0 || echo 1)" 'no ntfy rule'
+check 'orchestrator keeps cross-repo findings' \
+  "$([[ -f "$ORCH_FILE" ]] && grep -qF 'Cross-repo interaction' "$ORCH_FILE" \
+    && grep -qF 'repos still fit together' "$ORCH_FILE" && echo 0 || echo 1)" 'no cross-repo reconcile'
+check 'orchestrator waits for human approve before posting' \
+  "$([[ -f "$ORCH_FILE" ]] && grep -qF 'Wait for human approval' "$ORCH_FILE" \
+    && grep -qF 'review-post-comments' "$ORCH_FILE" && echo 0 || echo 1)" 'no gated post step'
+check 'post plan uses anchored comments with category' \
+  "$([[ -f "$ORCH_FILE" ]] && grep -qF 'filePath' "$ORCH_FILE" \
+    && grep -qF 'replyToThreadId' "$ORCH_FILE" && echo 0 || echo 1)" 'no post-plan schema'
 
 echo
 echo '2d. a repo-supplied prompt is used, but still cannot lift the constraints'
@@ -362,7 +384,13 @@ sed -n '/^CURSOR_CMD=/p' "$REAL" >> "$CTMP/c.sh"
 sed -n '/^PROMPT_MAX_CHARS=/p' "$REAL" >> "$CTMP/c.sh"
 sed -n '/^sh_quote()/,/^}/p' "$REAL" >> "$CTMP/c.sh"
 sed -n '/^claude_command()/,/^}/p' "$REAL" >> "$CTMP/c.sh"
+sed -n '/^orchestrator_command()/,/^}/p' "$REAL" >> "$CTMP/c.sh"
+sed -n '/^review_helper_path()/,/^}/p' "$REAL" >> "$CTMP/c.sh"
+sed -n '/^review_post_helper()/,/^}/p' "$REAL" >> "$CTMP/c.sh"
+sed -n '/^review_pipeline_helper()/,/^}/p' "$REAL" >> "$CTMP/c.sh"
 sed -n '/^cursor_reviewer_command()/,/^}/p' "$REAL" >> "$CTMP/c.sh"
+ID=23660
+ITEM_DIR="$ITEM"
 # shellcheck disable=SC1090
 source "$CTMP/c.sh"
 CMD="$(claude_command claude-opus-4-5 acceptEdits 'short prompt' "$ITEM/review-23660-reviewer-prompt.md")"
@@ -371,10 +399,17 @@ check 'reviewer uses REVIEWER_MODEL default' \
   "$(yes grep -qF -- '--model claude-opus-4-5' <<<"$CMD")" "cmd=$CMD"
 check 'reviewer uses acceptEdits' \
   "$(yes grep -qF -- '--permission-mode acceptEdits' <<<"$CMD")" "cmd=$CMD"
+check 'Bash is pre-approved for unattended review' \
+  "$(yes grep -qF -- "--allowed-tools 'Bash," <<<"$CMD")" "cmd=$CMD"
+check 'default reviewer permission mode is auto' \
+  "$(yes grep -qF "REVIEWER_PERMISSION_MODE='auto'" "$REAL")" "missing auto default"
 check 'commit and push are denied' \
   "$(yes grep -qF 'Bash(git commit:*)' <<<"$CMD")" "cmd=$CMD"
 check 'writing back to Azure DevOps is denied' \
   "$(yes grep -qF 'Bash(az boards:*)' <<<"$CMD")" "cmd=$CMD"
+check 'the allow list is ONE comma-joined argument' \
+  "$(ok "$(grep -o -- "--allowed-tools '[^']*'" <<<"$CMD" | wc -l)" 1)" \
+  "the flag would swallow later args: $CMD"
 check 'the deny list is ONE comma-joined argument' \
   "$(ok "$(grep -o -- "--disallowed-tools '[^']*'" <<<"$CMD" | wc -l)" 1)" \
   "the flag would swallow the prompt: $CMD"
@@ -382,17 +417,22 @@ check 'a short prompt is expanded from the file at run time' \
   "$(yes grep -qF '"$(cat ' <<<"$CMD")" "cmd=$CMD"
 BIG="$(head -c 20000 /dev/zero | tr '\0' 'x')"
 CMDBIG="$(claude_command claude-opus-4-5 acceptEdits "$BIG" "$ITEM/review-23660-reviewer-prompt.md")"
-check 'an oversized prompt points at the file instead' \
-  "$(yes grep -qF 'Read ' <<<"$CMDBIG")" "cmd=$CMDBIG"
-check 'and does not inline it' "$(no grep -qF '$(cat ' <<<"$CMDBIG")" 'still inlined'
+check 'an oversized prompt still expands from the file' \
+  "$(yes grep -qF '$(cat ' <<<"$CMDBIG")" "cmd=$CMDBIG"
+check 'options end with -- before the prompt' \
+  "$(yes grep -qE -- ' -- "\$\(cat ' <<<"$CMD")" "cmd=$CMD"
 CCMD="$(cursor_reviewer_command 'short' "$ITEM/review-23660-reviewer-prompt.md" "$ITEM/review-23660-findings-cursor.md")"
 check 'cursor command uses CURSOR_CMD' \
-  "$(yes grep -qF 'agent --auto-review' <<<"$CCMD")" "cmd=$CCMD"
+  "$(yes grep -qF 'agent --trust' <<<"$CCMD")" "cmd=$CCMD"
 check 'cursor command reads the shared reviewer prompt' \
   "$(yes grep -qF 'review-23660-reviewer-prompt.md' <<<"$CCMD")" "cmd=$CCMD"
-OCMD="$(claude_command claude-opus-4-5 acceptEdits 'short' "$ITEM/review-23660-orchestrator-prompt.md")"
-check 'orchestrator command uses ORCHESTRATOR_MODEL' \
-  "$(yes grep -qF -- '--model claude-opus-4-5' <<<"$OCMD")" "cmd=$OCMD"
+OCMD="$(orchestrator_command)"
+check 'orchestrator pane runs the pipeline script' \
+  "$(yes grep -qF 'review-pipeline.sh' <<<"$OCMD")" "cmd=$OCMD"
+check 'pipeline gets the work item id and item dir' \
+  "$(yes grep -qF "$ITEM" <<<"$OCMD" && yes grep -qF '23660' <<<"$OCMD")" "cmd=$OCMD"
+check 'pipeline inherits ORCHESTRATOR_MODEL' \
+  "$(yes grep -qF 'WT_REVIEW_ORCHESTRATOR_MODEL=' <<<"$OCMD")" "cmd=$OCMD"
 
 # ---------------------------------------------------------------------------
 echo
@@ -408,7 +448,7 @@ check 'the review row is labelled with the bare id (not the title)' \
 check 'Review root has a shell tab only' "$(ok "$(tab_labels "$ROOT_WS")" 'bash')" \
   "tabs=$(tab_labels "$ROOT_WS")"
 check 'the review row has dual review tabs' \
-  "$(ok "$(tab_labels "$ITEM_WS")" 'Claude Opus Reviewer,Cursor Auto Reviewer,Orchestrator,Summary,notes')" \
+  "$(ok "$(tab_labels "$ITEM_WS")" 'Claude Opus Reviewer,Cursor Auto Reviewer,Orchestrator,bash,notes')" \
   "tabs=$(tab_labels "$ITEM_WS")"
 check 'the PR row has notes only' \
   "$(ok "$(tab_labels "$PR_WS")" 'notes')" "tabs=$(tab_labels "$PR_WS")"
