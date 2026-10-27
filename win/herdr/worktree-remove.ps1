@@ -470,6 +470,37 @@ if ($env:WT_ASSUME_YES -eq '1') {
 }
 
 # --- execute ---------------------------------------------------------------
+# Remember focus before any close. Closing a workspace makes herdr jump the UI
+# to another row (often the last in the list); put focus back afterwards.
+$wsListJson = Invoke-HerdrJson @('workspace', 'list')
+$focusBefore = ''
+$wsOrder = [System.Collections.Generic.List[string]]::new()
+$closing = @{}
+if ($null -ne $wsListJson) {
+  foreach ($w in @($wsListJson.result.workspaces)) {
+    if ($null -eq $w) { continue }
+    $id = "$($w.workspace_id)"
+    if ($id) { $wsOrder.Add($id) | Out-Null }
+    if ($w.focused -eq $true) { $focusBefore = $id }
+  }
+}
+foreach ($sws in $StoryWsIds) { if ($sws) { $closing[$sws] = $true } }
+foreach ($ws in $WtWs) { if ($ws) { $closing[$ws] = $true } }
+$focusFallback = ''
+if ($focusBefore -and $closing.ContainsKey($focusBefore)) {
+  $idx = $wsOrder.IndexOf($focusBefore)
+  if ($idx -ge 0) {
+    for ($j = $idx - 1; $j -ge 0; $j--) {
+      if (-not $closing.ContainsKey($wsOrder[$j])) { $focusFallback = $wsOrder[$j]; break }
+    }
+    if (-not $focusFallback) {
+      for ($j = $idx + 1; $j -lt $wsOrder.Count; $j++) {
+        if (-not $closing.ContainsKey($wsOrder[$j])) { $focusFallback = $wsOrder[$j]; break }
+      }
+    }
+  }
+}
+
 # Close a story's workspaces - the story row AND its per-repo rows - BEFORE
 # touching any checkout. Their agents hold files inside the checkouts open, and
 # a repo row is rooted in the checkout itself; pull it out from under a live
@@ -595,6 +626,25 @@ if ($DirtySkipped -gt 0) {
 } else {
   Write-Host "OK removed $RemovedCount worktree(s) for story ${ID}${repoNote}${leftNote}."
 }
+$restoreFocus = ''
+if ($focusBefore -and -not $closing.ContainsKey($focusBefore)) {
+  $restoreFocus = $focusBefore
+} elseif ($focusFallback) {
+  $restoreFocus = $focusFallback
+}
+if ($restoreFocus) {
+  $still = Invoke-HerdrJson @('workspace', 'list')
+  $exists = $false
+  if ($null -ne $still) {
+    foreach ($w in @($still.result.workspaces)) {
+      if ("$($w.workspace_id)" -eq $restoreFocus) { $exists = $true; break }
+    }
+  }
+  if ($exists -and (Test-Herdr @('workspace', 'focus', $restoreFocus))) {
+    Write-Host "-> herdr:  restored focus to $restoreFocus"
+  }
+}
+
 # A worktree that could not be deleted must not report success: the story is
 # still half there, and a later worktree-make would trip over it.
 if ($Stuck -gt 0) {

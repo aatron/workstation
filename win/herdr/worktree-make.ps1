@@ -1,46 +1,33 @@
-# make-worktree.ps1
+# worktree-make.ps1
 # Create a multi-repo herdr worktree structure for an Azure DevOps story.
 # Two types: development and review.
+#
+# This is the PowerShell counterpart of wsl/herdr/worktree-make.sh and is kept
+# deliberately in step with it: same sidebar shape, same tab names (except the
+# shell tab, which is 'pwsh' here and 'bash' there), same git guarantees, same
+# exit codes. Fix a bug in one and fix it in the other.
 #
 # THE WORKSPACE IS THE STORY, NOT THE REPO:
 #   herdr's sidebar groups workspaces by their source repository
 #   (worktree.repo_key) and nests linked worktrees under their primary clone.
 #   That grouping is built in - there is no config for it - so a workspace made
-#   with `herdr worktree create` ALWAYS lands under its clone, and a story
-#   spanning four repos became four unrelated rows in four different groups:
-#       repo1 -> {id}-{slug}
-#       repo2 -> {id}-{slug}
-#   `herdr worktree create --workspace <ID>` is not a way out: --workspace and
-#   --cwd are mutually exclusive, and --workspace only says which workspace to
-#   take the SOURCE REPO from - it still creates a workspace of its own.
-#   So this script adds the worktrees with plain `git worktree add` and builds
-#   the rows itself. A workspace with no worktree metadata is not grouped at all,
-#   so the sidebar reads story-first, one row per repo drawn beneath it:
-#       {id}-{slug}            cwd = the story folder
-#         |- repo1             cwd = {id}-{slug}/repo1
-#         `- repo2             cwd = {id}-{slug}/repo2
-#   The connectors need one line in config.toml - see Initialize-StoryWorkspace,
-#   which prints it when it is missing.
+#   with `herdr worktree create` ALWAYS lands under its clone. This script adds
+#   the git worktrees with plain `git worktree add` and creates ONE herdr
+#   workspace at the story folder (no worktree metadata, so it is not grouped
+#   under a clone). Repo checkouts live as subfolders; they do not get their
+#   own sidebar rows.
 #
-#   The story row carries four tabs at the story root, where one agent sees every
-#   repo in the story at once:
-#       notes   micro on the notes file of the first repo requested
+#   The story row carries four tabs at the story root:
+#       notes   micro on repos.txt (one related repo name per line, saved on disk)
 #       claude  $CLAUDE_CMD
 #       cursor  $CURSOR_CMD
 #       pwsh    bare shell
-#   Each repo row carries three tabs at that repo's worktree root:
-#       notes   micro on that repo's own notes file
-#       claude  $CLAUDE_CMD
-#       pwsh    bare shell
 #
-#   herdr has no real parent/child nesting - the sidebar is a flat list of
-#   spaces - so the connector is a per-row token and the rows sit together
-#   because they are created back to back (the sidebar orders by creation).
-#   See Initialize-StoryWorkspace.
-#
-#   Re-running for the same story reuses every workspace it already has and adds
-#   only the tabs that are missing. Commands are submitted ONLY into tabs the run
-#   created, so a tab you are already working in is never typed into.
+#   Re-running for the same story reuses the story workspace and adds only the
+#   tabs that are missing. Commands are submitted into any story tab whose pane
+#   is still an idle shell (herdr-plus layout often creates the tabs without
+#   starting their commands). A pane already running micro/claude/agent is left
+#   alone, so a tab you are working in is never typed into.
 #
 # Git behavior on create - THE SCRIPT OWNS THE BRANCH, NOT HERDR:
 #   `herdr worktree create --base <ref>` silently IGNORED --base when the local
@@ -72,6 +59,15 @@
 #                      script reports how far behind the base it is)
 #   WT_RESET_BRANCH=1  discard the unique commits and start from the base
 #
+# Folder structure produced (no feature/<you> prefix on the path):
+#   <herdr [worktrees].directory>/<type>/
+#       <id>-<slug>/                 <- story folder (herdr workspace cwd)
+#           repos.txt                <- related repo names, one per line
+#           <id>-<slug>-<repo>.txt   <- per-repo notes (optional / herdr-plus)
+#           .notespath-<repo>        <- absolute path to that repo's notes file
+#           <repo>/                  <- git worktree
+#           <repo>/ ...
+#
 # Non-interactive mode (az-watcher / any automation):
 #   Set BOTH WT_ID and WT_SLUG and every prompt is skipped - no gum.
 #     WT_ID, WT_SLUG, WT_REPOS, WT_BRANCHES_FILE
@@ -97,53 +93,9 @@ $CURSOR_CMD = 'agent --auto-review'
 # at the story root - the repos are sub-folders of it.
 $STORY_TABS = @('notes', 'claude', 'cursor', 'pwsh')
 
-# The tabs of each repo's own workspace, opened at that repo's worktree root.
-$REPO_TABS = @('notes', 'claude', 'pwsh')
-
-# Tree connectors, reported as each repo row's $tree sidebar token so they render
-# to the LEFT of the state icon and the bullet indents with the tree:
-#
-#     *  23597-my-story
-#       |- . *  repo-a
-#       `- . *  repo-b
-#
-# This only renders if config.toml asks for it (see Test-TreeTokenConfigured):
-#
-#   [ui.sidebar.spaces]
-#   rows = [["$tree", "state_icon", "workspace"]]
-#
-# ABOUT THAT DOT: herdr joins the segments of a sidebar row with a hardcoded
-# " . " (a middle dot) and exposes no setting for it - not at [ui],
-# [ui.sidebar] or [ui.sidebar.spaces], and a row element's object form only
-# accepts token/bold/dim/fg. So a connector segment followed by state_icon always
-# shows it. Putting the connector in the LABEL instead avoids the dot, but then
-# the status bullet is stuck at the far left and stops reading as nested; that was
-# tried and rejected. Keeping the live bullet inside the tree is worth the dot -
-# do not "fix" this by moving the connector back into the label.
-#
-# Built from char codes rather than typed literally: Windows PowerShell 5.1
-# reads a .ps1 as ANSI unless it has a BOM, which would mangle them on the way
-# in. herdr itself stores and renders them as UTF-8 correctly.
-$TREE_BRANCH = -join @([char]0x251C, [char]0x2500)   # |- for all but the last repo
-$TREE_LAST = -join @([char]0x2514, [char]0x2500)     # `- for the last one
-# Swap both for '|-' and '`-' if your terminal font has no box-drawing glyphs.
-
-# Two blank columns in front of a repo row's connector, so it sits inside its
-# story rather than flush under the story's own bullet.
-#
-# NOT two spaces: herdr TRIMS LEADING WHITESPACE off a token value, so '  |-'
-# arrives as '|-' and the indent silently disappears. U+2800 BRAILLE PATTERN BLANK
-# is blank on screen but is not whitespace to a trimmer, so it holds the first
-# column open; the second can be an ordinary space because interior spaces are
-# kept. If U+2800 shows as a box in your font, use two spaces and accept that the
-# indent is lost, or pick another blank-but-not-whitespace glyph.
-$TREE_INDENT = -join @([char]0x2800, ' ')
-
-# Fallback indent, used only when config.toml does NOT render the $tree token.
-# It goes in the label, so it shifts the text but not the bullet - which is
-# exactly the limitation $tree exists to fix.
-$CHILD_LABEL_PREFIX = '  '
-
+# Glyphs stripped from legacy labels (older builds drew tree connectors in the
+# label). Built from char codes: Windows PowerShell 5.1 reads a .ps1 as ANSI
+# unless it has a BOM, which would mangle them on the way in.
 # Characters a label may start with because an EARLIER version of this script put
 # them there (it drew the connectors in the label for a while). Stripped when
 # matching a row, so such a row is adopted and renamed rather than duplicated.
@@ -263,169 +215,6 @@ function Invoke-HerdrQuiet([string[]]$HerdrArgs) {
   try { & herdr @HerdrArgs 2>$null | Out-Null } catch { } finally { $ErrorActionPreference = $prev }
 }
 
-# ---------------------------------------------------------------------------
-# Talking to the API socket directly
-#
-# herdr appends every new workspace to the END of the sidebar. That is fine when
-# a story is built in one go, but adding a repo to a story that already exists
-# drops the new row at the bottom of the sidebar, adrift from the story it
-# belongs to - and no amount of connector drawing fixes a row that is thirty
-# rows away from its parent.
-#
-# The protocol has the fix: workspace.move_block takes an ordered list of
-# workspace ids plus an anchor to gather them in front of. `herdr workspace` has
-# no move subcommand, so it is unreachable through the CLI and this has to speak
-# to the socket itself.
-#
-# On Windows the "socket" is a named pipe whose NAME is the socket file's own
-# path (\\.\pipe\C:\...\herdr.sock). The file at that path holds
-# "<server-pid>:<token>", but the protocol never asks for the token: requests
-# are plain newline-delimited JSON. Access control is the pipe's own ACL.
-#
-# This is a display nicety, so every failure here is swallowed - an unreachable
-# socket, an older herdr without the method, a pipe we cannot open. The rows are
-# already correct; only their order suffers.
-# ---------------------------------------------------------------------------
-# Two things this must NOT do.
-#
-# It must not derive the socket from HERDR_CONFIG_PATH. That variable names a
-# config FILE, which can sit anywhere - the test harness points it at a fixture -
-# whereas the socket always lives in herdr's own directory. herdr's CLI resolves
-# it this way too, which is why every `herdr` command still reaches the server
-# when HERDR_CONFIG_PATH is pointed somewhere else entirely.
-#
-# And it must not assume the default session. A NAMED session gets its own socket
-# under sessions\<name>\; a script that ignored HERDR_SESSION would talk to the
-# 'default' server (or to nothing at all) while every herdr command it ran went
-# somewhere else. herdr sets HERDR_SESSION in the environment of every pane it
-# starts, so a script launched from a quick action inherits the right one.
-function Get-HerdrSocketPath {
-  if ($env:HERDR_SOCKET_PATH) { return $env:HERDR_SOCKET_PATH }
-  $dir = Join-Path $env:APPDATA 'herdr'
-  if ($env:HERDR_SESSION) {
-    return (Join-Path $dir "sessions\$($env:HERDR_SESSION)\herdr.sock")
-  }
-  return (Join-Path $dir 'herdr.sock')
-}
-
-function Invoke-HerdrSocket([string]$Method, $Params) {
-  $sock = Get-HerdrSocketPath
-  if (-not (Test-Path -LiteralPath $sock)) { return $null }
-  $pipe = $null
-  $prev = $ErrorActionPreference
-  $ErrorActionPreference = 'Stop'
-  try {
-    $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(
-      '.', $sock, [System.IO.Pipes.PipeDirection]::InOut)
-    $pipe.Connect(3000)
-    $enc = New-Object System.Text.UTF8Encoding($false)
-    $req = @{ id = 'worktree-make'; method = $Method; params = $Params } |
-      ConvertTo-Json -Depth 8 -Compress
-    $bytes = $enc.GetBytes($req + "`n")
-    $pipe.Write($bytes, 0, $bytes.Length)
-    $pipe.Flush()
-    # A pipe stream in byte mode does not support ReadTimeout, so the read is
-    # done asynchronously and waited on. Without this a server that never
-    # answers would hang the script instead of degrading.
-    $sb = New-Object System.Text.StringBuilder
-    $buf = New-Object byte[] 65536
-    while ($true) {
-      $ar = $pipe.BeginRead($buf, 0, $buf.Length, $null, $null)
-      if (-not $ar.AsyncWaitHandle.WaitOne(5000)) { return $null }
-      $n = $pipe.EndRead($ar)
-      if ($n -le 0) { break }
-      [void]$sb.Append($enc.GetString($buf, 0, $n))
-      if ($sb.ToString().Contains("`n")) { break }
-    }
-    $text = $sb.ToString().Trim()
-    if (-not $text) { return $null }
-    return ($text | ConvertFrom-Json)
-  } catch {
-    return $null
-  } finally {
-    $ErrorActionPreference = $prev
-    if ($pipe) { $pipe.Dispose() }
-  }
-}
-
-# Every workspace id in sidebar order, worktree-backed rows included. Get-WsIndex
-# deliberately drops those, but they still occupy sidebar positions, so ordering
-# has to see the whole list to pick a correct anchor.
-function Get-SidebarIds {
-  $json = Invoke-HerdrJson @('workspace', 'list')
-  if ($null -eq $json) { return @() }
-  return @(@($json.result.workspaces) |
-    Where-Object { $null -ne $_ } |
-    ForEach-Object { "$($_.workspace_id)" })
-}
-
-# Move one workspace to an absolute 0-based position in the sidebar.
-#
-# workspace.move is used rather than the newer workspace.move_block because it is
-# the only reordering call present on BOTH herdr builds this repo targets: this
-# machine runs a 0.7.5 preview (protocol 18, which has move_block), the WSL side
-# runs plain 0.7.5 (protocol 17, which does not - it rejects move_block outright
-# with "unknown variant"). Driving the older, narrower call from both sides keeps
-# the two behaving identically instead of quietly doing nothing on whichever
-# machine is behind.
-#
-# Semantics, verified against a live server: the workspace is removed from the
-# list and re-inserted so that it ends up AT insert_index in the resulting list.
-function Move-Workspace([string]$Ws, [int]$Index) {
-  $resp = Invoke-HerdrSocket 'workspace.move' @{ workspace_id = $Ws; insert_index = $Index }
-  if ($null -eq $resp -or $null -ne $resp.error) { return $false }
-  return $true
-}
-
-# Gather $OrderedIds into one contiguous run, in the order given, without moving
-# the group as a whole: the run is anchored where its topmost member already sits.
-# Returns $true when the sidebar was changed.
-function Set-SidebarOrder([string[]]$OrderedIds) {
-  $ids = @($OrderedIds | Where-Object { $_ } | Select-Object -Unique)
-  if ($ids.Count -lt 2) { return $false }
-  $current = Get-SidebarIds
-  if ($current.Count -eq 0) { return $false }
-
-  # Drop ids herdr does not know about - a row closed by hand since the last
-  # refresh would otherwise poison the whole call.
-  $ids = @($ids | Where-Object { $current -contains $_ })
-  if ($ids.Count -lt 2) { return $false }
-
-  # The run is anchored at the topmost member's current slot, so gathering the
-  # group never slides the whole block up or down the sidebar.
-  $start = -1
-  for ($i = 0; $i -lt $current.Count; $i++) {
-    if ($ids -contains $current[$i]) { $start = $i; break }
-  }
-  if ($start -lt 0) { return $false }
-
-  # Already contiguous and already in this order? Then leave the sidebar alone
-  # rather than emitting a reorder event every single run.
-  $same = $true
-  for ($i = 0; $i -lt $ids.Count; $i++) {
-    if (($start + $i) -ge $current.Count -or $current[$start + $i] -ne $ids[$i]) {
-      $same = $false; break
-    }
-  }
-  if ($same) { return $false }
-
-  # Place the members one at a time, simulating the resulting list as we go so
-  # the next index is right without another round trip per move.
-  $sim = [System.Collections.Generic.List[string]]::new()
-  foreach ($c in $current) { [void]$sim.Add("$c") }
-  $moved = $false
-  for ($i = 0; $i -lt $ids.Count; $i++) {
-    $target = $start + $i
-    $at = $sim.IndexOf($ids[$i])
-    if ($at -lt 0 -or $at -eq $target) { continue }
-    if (-not (Move-Workspace $ids[$i] $target)) { return $false }
-    $moved = $true
-    $sim.RemoveAt($at)
-    $sim.Insert($target, $ids[$i])
-  }
-  return $moved
-}
-
 function Get-PaneIdByTab([string]$Ws, [string]$Tab) {
   $json = Invoke-HerdrJson @('pane', 'list', '--workspace', $Ws)
   if ($null -eq $json) { return '' }
@@ -436,47 +225,80 @@ function Get-PaneIdByTab([string]$Ws, [string]$Tab) {
   return ''
 }
 
+# Wait until the pane's foreground is a settled shell (only shell names for two
+# consecutive polls). New panes briefly run profile noise; treating the first
+# non-shell as permanent busy skipped every create-time start.
+# Returns $true when idle-shell, $false when a durable app is running (or timeout).
 function Test-PaneReadyAndIdle([string]$Pane) {
-  $deadline = [DateTime]::UtcNow.AddSeconds(5)
-  $names = @()
+  $deadline = [DateTime]::UtcNow.AddSeconds(20)
+  $stable = 0
+  $shellRe = '^(pwsh|powershell|powershell_ise|cmd|bash|sh|dash|zsh|fish|-bash|-sh|-zsh)$'
+  $durableRe = '^(micro|nvim|vim|vi|emacs|claude|agent|cursor-agent|MainThread|node)$'
   while ([DateTime]::UtcNow -lt $deadline) {
     $info = Invoke-HerdrJson @('pane', 'process-info', '--pane', $Pane)
+    $names = @()
     if ($null -ne $info) {
       $names = @(@($info.result.process_info.foreground_processes) |
         Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
     }
-    if ($names.Count -gt 0) { break }
-    Start-Sleep -Milliseconds 200
-  }
-  if ($names.Count -eq 0) { return $true }
-  foreach ($n in $names) {
-    # herdr reports Windows process names complete with their extension
-    # ("powershell.exe"), which matched none of the shell names below - so every
-    # freshly created pane looked BUSY and the script quietly skipped every
-    # command it was supposed to start in it. Compare on the bare name.
-    $n = [IO.Path]::GetFileNameWithoutExtension($n.Trim())
-    if (-not $n) { continue }
-    switch -Regex ($n) {
-      '^(pwsh|powershell|powershell_ise|cmd|bash|sh|dash|zsh|fish|-bash|-sh|-zsh)$' { continue }
-      default { return $false }
+    if ($names.Count -eq 0) {
+      $stable = 0
+      Start-Sleep -Milliseconds 250
+      continue
     }
+
+    $onlyShell = $true
+    $durable = $false
+    foreach ($raw in $names) {
+      # herdr reports Windows process names with their extension ("powershell.exe").
+      $n = [IO.Path]::GetFileNameWithoutExtension(("$raw").Trim())
+      if (-not $n) { continue }
+      if ($n -match $shellRe) { continue }
+      if ($n -match $durableRe) { $durable = $true; $onlyShell = $false; break }
+      $onlyShell = $false
+    }
+
+    if ($durable) { return $false }
+    if ($onlyShell) {
+      $stable++
+      if ($stable -ge 2) { return $true }
+    } else {
+      $stable = 0
+    }
+    Start-Sleep -Milliseconds 250
   }
-  return $true
+  return $false
 }
 
+# Returns $true when the command was submitted, $false when the pane was busy or missing.
 function Invoke-InTab([string]$Ws, [string]$Tab, [string]$Dir, [string]$Cmd) {
   $pane = Get-PaneIdByTab $Ws $Tab
   if (-not $pane) {
     Write-Warning "no pane found for tab $Tab"
-    return
+    return $false
   }
   if (-not (Test-PaneReadyAndIdle $pane)) {
     Write-Host "-> tab ${Tab}: pane busy, left as-is"
-    return
+    return $false
   }
   $dirLit = "'" + ($Dir -replace "'", "''") + "'"
   $full = "Set-Location -LiteralPath $dirLit; $Cmd"
-  Invoke-HerdrQuiet @('pane', 'run', $pane, $full)
+  # Surface pane-run failures — a silent fail is how empty tabs ship.
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & herdr @('pane', 'run', $pane, $full) 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "herdr pane run failed for tab $Tab ($pane)"
+      return $false
+    }
+  } catch {
+    Write-Warning "herdr pane run failed for tab $Tab ($pane): $_"
+    return $false
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+  return $true
 }
 
 function Get-RepoNotesPath([string]$Repo) {
@@ -495,16 +317,18 @@ function Write-RepoNotes([string]$Repo) {
   Write-Host "-> notes:  $notes"
 }
 
-# The notes file the story's notes tab opens: the first repo that was asked for,
-# falling back to the first one that actually ended up with a notes file (the
-# first repo may have failed).
-function Get-StoryNotesPath {
-  foreach ($repo in $script:RepoOrder) {
-    $p = Get-RepoNotesPath $repo
-    if (Test-Path -LiteralPath $p) { return $p }
-  }
-  if ($script:RepoOrder.Count -gt 0) { return (Get-RepoNotesPath $script:RepoOrder[0]) }
-  return ''
+function Get-StoryReposPath {
+  Join-Path $script:STORY_DIR 'repos.txt'
+}
+
+# Rewrite repos.txt from the story's related repos (always, so re-runs stay in sync).
+function Write-StoryReposFile {
+  $path = Get-StoryReposPath
+  $repos = @(Get-StoryRepos)
+  $text = if ($repos.Count -gt 0) { ($repos -join "`n") + "`n" } else { '' }
+  $enc = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::WriteAllText($path, $text, $enc)
+  Write-Host "-> repos:  $path ($($repos.Count) line(s))"
 }
 
 # Compare paths herdr reports against paths we built. herdr hands back either
@@ -522,42 +346,6 @@ function ConvertTo-PsLiteral([string]$Value) {
 function Get-HerdrConfigPath {
   if ($env:HERDR_CONFIG_PATH) { return $env:HERDR_CONFIG_PATH }
   return (Join-Path $env:APPDATA 'herdr\config.toml')
-}
-
-# Does the sidebar actually draw the $tree token?
-#
-# It is opt-in: herdr renders a space row from [ui.sidebar.spaces].rows, whose
-# default is [["state_icon", "workspace"]] - state_icon first, so every bullet
-# sits hard against the left edge and no connector is drawn at all. Only a row
-# spec that puts $tree BEFORE state_icon draws the tree.
-#
-# install.ps1 never rewrites config.toml, so the script has to cope with both:
-# with $tree the repo label is the bare repo name and the token supplies the
-# drawing; without it the label carries a plain indent instead.
-function Test-TreeTokenConfigured {
-  $cfg = Get-HerdrConfigPath
-  if (-not (Test-Path -LiteralPath $cfg)) { return $false }
-  $inSection = $false
-  foreach ($line in (Get-Content -LiteralPath $cfg -ErrorAction SilentlyContinue)) {
-    if ($line -match '^\s*\[ui\.sidebar\.spaces\]') { $inSection = $true; continue }
-    if ($line -match '^\s*\[') { $inSection = $false; continue }
-    if (-not $inSection) { continue }
-    # A commented-out sample line must not count as configured.
-    if ($line -match '^\s*#') { continue }
-    if ($line -match '\$tree') { return $true }
-  }
-  return $false
-}
-
-# Display-only sidebar token. Never fatal: a herdr that does not take it just
-# leaves the row looking the way it does today.
-function Set-TreeToken([string]$Ws, [string]$Value) {
-  if (-not $Ws) { return }
-  if ($Value) {
-    Invoke-HerdrQuiet @('workspace', 'report-metadata', $Ws, '--source', 'worktree-make', '--token', "tree=$Value")
-  } else {
-    Invoke-HerdrQuiet @('workspace', 'report-metadata', $Ws, '--source', 'worktree-make', '--clear-token', 'tree')
-  }
 }
 
 # The identity inside a label, with any tree drawing or indent stripped off the
@@ -652,13 +440,13 @@ function Get-TabMap([string]$Ws) {
 # Cosmetic relative to the worktrees themselves: every failure warns and carries
 # on, because the checkouts on disk are already correct and usable either way.
 #
-# Commands are only ever submitted into tabs THIS CALL created. Test-PaneReadyAndIdle
-# is not enough on its own: herdr reports claude.exe in a busy pane but reports
-# only the shell for a pane sitting in micro, so a re-run that trusted the probe
-# would type "micro <path>" straight into the open notes buffer.
+# Start each tab's command when its pane is still an idle shell. herdr-plus
+# layout often creates notes/claude/cursor/pwsh without starting them; a re-run
+# must fill those. Test-PaneReadyAndIdle refuses a pane that already has micro,
+# claude, or agent in the foreground, so an open editor or agent is never typed
+# into.
 function Initialize-Workspace([string]$Dir, [string]$Label, [string]$BareName,
   [string[]]$TabNames, [hashtable]$Commands) {
-  $fresh = @{}
   $ws = Find-WorkspaceAt $Dir $BareName
   if ($ws) {
     Write-Host "-> herdr:  reusing workspace $ws ($BareName)"
@@ -681,7 +469,6 @@ function Initialize-Workspace([string]$Dir, [string]$Label, [string]$BareName,
     $rootTab = "$($created.result.tab.tab_id)"
     if ($rootTab -and $TabNames.Count -gt 0) {
       Invoke-HerdrQuiet @('tab', 'rename', $rootTab, $TabNames[0])
-      $fresh[$TabNames[0]] = $true
     }
     Write-Host "-> herdr:  workspace $ws created ($Label) at $Dir"
   }
@@ -695,106 +482,44 @@ function Initialize-Workspace([string]$Dir, [string]$Label, [string]$BareName,
     $id = if ($null -ne $t) { "$($t.result.tab.tab_id)" } else { '' }
     if ($id) {
       $tabs[$name] = $id
-      $fresh[$name] = $true
     } else {
       Write-Warning "could not create the '$name' tab in workspace $ws"
     }
   }
 
+  $started = [System.Collections.Generic.List[string]]::new()
+  $kept = [System.Collections.Generic.List[string]]::new()
   foreach ($name in $TabNames) {
-    if (-not $fresh[$name] -or -not $tabs[$name]) { continue }
+    if (-not $tabs[$name]) { continue }
     $cmd = "$($Commands[$name])"
     if (-not $cmd) { continue }
-    Invoke-InTab $ws $tabs[$name] $Dir $cmd
+    if (Invoke-InTab $ws $tabs[$name] $Dir $cmd) {
+      $started.Add($name) | Out-Null
+    } else {
+      $kept.Add($name) | Out-Null
+    }
   }
 
-  $started = @($TabNames | Where-Object { $fresh[$_] })
-  $kept = @($TabNames | Where-Object { -not $fresh[$_] })
   Write-Host "-> tabs:   $($TabNames -join ', ')"
-  if ($started.Count -gt 0) { Write-Host "           started: $($started -join ', ')" }
-  if ($kept.Count -gt 0) { Write-Host "           left as they were: $($kept -join ', ')" }
+  if ($started.Count -gt 0) { Write-Host "           started (idle panes): $($started -join ', ')" }
+  if ($kept.Count -gt 0) { Write-Host "           left as they were (busy or missing): $($kept -join ', ')" }
   return $ws
 }
 
-# The story row, then one row per repo drawn beneath it as its children.
-#
-#     {id}-{slug}          story workspace, cwd = story folder
-#     |- repo1             repo workspace,  cwd = story/repo1
-#     `- repo2
-#
-# herdr has NO parent/child nesting: its sidebar is a flat list of spaces (only
-# worktree workspaces get grouped, and then always under their clone - the very
-# thing this replaced). Two things stand in for it:
-#
-#   * the connector, reported as each repo row's $tree token so it renders to the
-#     LEFT of the state icon and the bullet indents with the tree. Indenting the
-#     label alone cannot do that - the bullet comes from state_icon, the first
-#     thing in the row - which is why $CHILD_LABEL_PREFIX is only the fallback
-#     for a config.toml that does not lay the row out that way. herdr also draws
-#     its own " . " between segments, which no setting suppresses; that dot is
-#     accepted deliberately, see the $TREE_BRANCH block.
-#   * adjacency, from creating the repo rows immediately after their story row,
-#     since the sidebar orders by creation. A repo added to an existing story
-#     lands at the bottom of the list rather than under its story until herdr is
-#     restarted.
+# One story workspace at the story folder. Repo checkouts are subfolders only.
 function Initialize-StoryWorkspace {
-  $notes = Get-StoryNotesPath
-  $storyCmds = @{ claude = $CLAUDE_CMD; cursor = $CURSOR_CMD }
-  if ($notes) { $storyCmds['notes'] = "micro $(ConvertTo-PsLiteral $notes)" }
-  $notesName = if ($notes) { Split-Path -Leaf $notes } else { 'none' }
-  Write-Host "-> story:  workspace tabs at the story root (notes -> $notesName)"
+  Write-StoryReposFile
+  $notes = Get-StoryReposPath
+  $claudeCmd = if ($env:WT_CLAUDE_CMD) { $env:WT_CLAUDE_CMD } else { $CLAUDE_CMD }
+  $storyCmds = @{
+    claude = $claudeCmd
+    cursor = $CURSOR_CMD
+    notes  = "micro $(ConvertTo-PsLiteral $notes)"
+  }
+  Write-Host "-> story:  workspace tabs at the story root (notes -> $(Split-Path -Leaf $notes))"
 
   $storyName = "$($script:ID)-$($script:SLUG)"
-  $ws = Initialize-Workspace $script:STORY_DIR $storyName $storyName $STORY_TABS $storyCmds
-  if (-not $ws) { return }
-  # The story row is the trunk: no connector. An absent token renders as nothing -
-  # no segment, so no separator dot either - the same way $jj_status does on a
-  # workspace that is not a jj repo.
-  Set-TreeToken $ws ''
-
-  # The story row leads; each repo row follows in the order the story lists them.
-  $ordered = @($ws)
-
-  $tree = Test-TreeTokenConfigured
-  $repos = @(Get-StoryRepos)
-  for ($i = 0; $i -lt $repos.Count; $i++) {
-    $repo = $repos[$i]
-    $dir = Join-Path $script:STORY_DIR $repo
-    $repoNotes = Get-RepoNotesPath $repo
-    $repoCmds = @{ claude = $CLAUDE_CMD }
-    if (Test-Path -LiteralPath $repoNotes) {
-      $repoCmds['notes'] = "micro $(ConvertTo-PsLiteral $repoNotes)"
-    }
-    # Connectors are re-reported every run, so the repo that used to be last gives
-    # up its corner when a new one is added after it.
-    $connector = if ($i -eq $repos.Count - 1) { $TREE_LAST } else { $TREE_BRANCH }
-    $label = if ($tree) { $repo } else { "$CHILD_LABEL_PREFIX$repo" }
-    Write-Host "-> repo:   $repo"
-    $rws = Initialize-Workspace $dir $label $repo $REPO_TABS $repoCmds
-    Set-TreeToken $rws ($TREE_INDENT + $connector)
-    if ($rws) { $ordered += $rws }
-  }
-
-  # A repo added to a story that already exists is created last, so herdr parks
-  # it at the bottom of the sidebar instead of under its story. Pull the story's
-  # rows back into one run. The connectors above are drawn from $repos, not from
-  # sidebar position, so they are already right either way - this only fixes
-  # where the rows physically sit.
-  if (Set-SidebarOrder $ordered) {
-    Write-Host ''
-    Write-Host '-> sidebar: pulled the story rows back together'
-  }
-
-  if (-not $tree -and $repos.Count -gt 0) {
-    Write-Host ''
-    Write-Host 'NOTE: the repo rows are indented by their label, so their bullets still sit'
-    Write-Host '      hard left and no connectors are drawn. To draw the tree, add this to'
-    Write-Host "      $(Get-HerdrConfigPath) and run 'herdr server reload-config':"
-    Write-Host ''
-    Write-Host '        [ui.sidebar.spaces]'
-    Write-Host '        rows = [["$tree", "state_icon", "workspace"]]'
-    Write-Host ''
-  }
+  $null = Initialize-Workspace $script:STORY_DIR $storyName $storyName $STORY_TABS $storyCmds
 }
 
 function Ask-Gum([string]$Prompt, [string]$Placeholder) {
@@ -822,9 +547,7 @@ function Test-WorktreePresent([string]$Repo) {
 }
 
 function Resolve-WorktreeRoot {
-  $cfg = if ($env:HERDR_CONFIG_PATH) { $env:HERDR_CONFIG_PATH } else {
-    Join-Path $env:APPDATA 'herdr\config.toml'
-  }
+  $cfg = Get-HerdrConfigPath
   $dir = ''
   if (Test-Path -LiteralPath $cfg) {
     $inSection = $false
@@ -1141,8 +864,7 @@ if (-not $script:ID -or -not $script:SLUG) {
 $BRANCH = "$BRANCH_PREFIX/$($script:ID)-$($script:SLUG)"
 $TYPE_DIR = Join-Path $WORKTREE_ROOT $SUBFOLDER
 $script:STORY_DIR = Join-Path $TYPE_DIR "$($script:ID)-$($script:SLUG)"
-# Repos in the order they were requested. The first one owns the notes file the
-# story's notes tab opens.
+# Repos in the order they were requested.
 $script:RepoOrder = @()
 
 New-Item -ItemType Directory -Force -Path $script:STORY_DIR | Out-Null

@@ -451,200 +451,95 @@ Check 'good repo created' (Test-Path -LiteralPath (Join-Path (Story '99014' 'zz-
 
 # ---------------------------------------------------------------------------
 Write-Host ''
-Write-Host '15. story topology: story row with four tabs, one repo row under it per repo'
+Write-Host '15. one story workspace, repos.txt, no per-repo sidebar rows'
 Reset-Fixture
 $a = New-Repo 'aaa' 'main' 1
 $b = New-Repo 'bbb' 'main' 2
 $res = Invoke-Make 'development' @{ WT_ID = '99015'; WT_SLUG = 'zz-topo'; WT_REPOS = 'aaa,bbb' }
 $storyDir = Split-Path -Parent (Story '99015' 'zz-topo' 'aaa')
+$reposTxt = Join-Path $storyDir 'repos.txt'
 Check 'exit 0' ($res.Code -eq 0) "exit=$($res.Code)`n$($res.Out)"
 Check 'both repos are folders inside the story' `
   ((Test-Path -LiteralPath (Join-Path (Story '99015' 'zz-topo' 'aaa') '.git')) -and
    (Test-Path -LiteralPath (Join-Path (Story '99015' 'zz-topo' 'bbb') '.git'))) 'a repo is missing'
+Check 'repos.txt exists' (Test-Path -LiteralPath $reposTxt) "path=$reposTxt"
+Check 'repos.txt lists aaa then bbb' `
+  ((Get-Content -LiteralPath $reposTxt -Raw) -eq "aaa`nbbb`n") "content=$(Get-Content -LiteralPath $reposTxt -Raw | Format-Hex)"
 
-# The story row is rooted at the story folder itself, not at any repo in it.
 $story = @(Get-FixtureWorkspaces $storyDir -Exact)
 Check 'exactly one story workspace' ($story.Count -eq 1) "count=$($story.Count)`n$($res.Out)"
 if ($story.Count -eq 1) {
   Check 'labeled {id}-{slug}' ("$($story[0].label)" -eq '99015-zz-topo') "label=$($story[0].label)"
-  # The whole point: a workspace with worktree metadata gets nested under its
-  # primary clone, which is the repo-centric layout this replaced.
   Check 'not nested under a repo (no worktree metadata)' ($null -eq $story[0].worktree) 'it is a worktree workspace'
   $labels = @(Get-TabLabels $story[0].workspace_id)
   foreach ($want in @('notes', 'claude', 'cursor', 'pwsh')) {
     Check "story has a '$want' tab" ($labels -contains $want) "tabs=$($labels -join ',')"
   }
-  Check 'story has no stray extra tab' ($labels.Count -eq 4) "tabs=$($labels -join ',')"
+  Check 'story has exactly four tabs' ($labels.Count -eq 4) "tabs=$($labels -join ',')"
 }
-
 foreach ($repo in @('aaa', 'bbb')) {
-  $rowDir = Story '99015' 'zz-topo' $repo
-  $row = @(Get-FixtureWorkspaces $rowDir -Exact)
-  Check "one workspace row for repo $repo" ($row.Count -eq 1) "count=$($row.Count)`n$($res.Out)"
-  if ($row.Count -ne 1) { continue }
-  # No $tree row spec in this fixture, so the indent falls back into the label.
-  Check "$repo row label is indented" ("$($row[0].label)" -eq "  $repo") "label=[$($row[0].label)]"
-  $rl = @(Get-TabLabels $row[0].workspace_id)
-  foreach ($want in @('notes', 'claude', 'pwsh')) {
-    Check "$repo row has a '$want' tab" ($rl -contains $want) "tabs=$($rl -join ',')"
-  }
-  Check "$repo row has exactly three tabs" ($rl.Count -eq 3) "tabs=$($rl -join ',')"
-  Check "$repo row has no cursor tab" (-not ($rl -contains 'cursor')) "tabs=$($rl -join ',')"
+  $row = @(Get-FixtureWorkspaces (Story '99015' 'zz-topo' $repo) -Exact)
+  Check "no workspace row for repo $repo" ($row.Count -eq 0) "count=$($row.Count)"
 }
-
-# Sidebar order is creation order, so the repo rows have to follow their story
-# row directly - that adjacency is the only thing making the indent read as
-# nesting.
 $all = @(Get-FixtureWorkspaces $storyDir)
-Check 'three rows in total (story + 2 repos)' ($all.Count -eq 3) "count=$($all.Count)"
-if ($all.Count -eq 3) {
-  $byNum = @($all | Sort-Object number)
-  Check 'story row comes first' ("$($byNum[0].label)" -eq '99015-zz-topo') "order=$(($byNum.label) -join ' | ')"
-  Check 'repo rows follow it, in the order requested' `
-    (("$($byNum[1].label)" -eq '  aaa') -and ("$($byNum[2].label)" -eq '  bbb')) `
-    "order=$(($byNum.label) -join ' | ')"
-  Check 'rows are consecutive (nothing wedged between them)' `
-    (($byNum[2].number - $byNum[0].number) -eq 2) "numbers=$(($byNum.number) -join ',')"
-}
+Check 'only one sidebar row for the story' ($all.Count -eq 1) "count=$($all.Count)"
 Check 'no per-repo worktree workspace was registered' `
   ((Get-WorktreeWorkspacesUnder $storyDir).Count -eq 0) 'a repo-level worktree workspace exists'
 
 # ---------------------------------------------------------------------------
 Write-Host ''
-Write-Host '16. re-running the same story reuses every row (no duplicates)'
+Write-Host '16. re-run reuses the story workspace (no duplicates)'
 $res = Invoke-Make 'development' @{ WT_ID = '99015'; WT_SLUG = 'zz-topo'; WT_REPOS = 'aaa,bbb' }
-$all2 = @(Get-FixtureWorkspaces $storyDir)
+$story2 = @(Get-FixtureWorkspaces $storyDir -Exact)
 Check 'exit 3 (nothing to do)' ($res.Code -eq 3) "exit=$($res.Code)`n$($res.Out)"
-Check 'still three rows' ($all2.Count -eq 3) "count=$($all2.Count)`n$($res.Out)"
-Check 'same workspace ids' `
-  ((($all.workspace_id | Sort-Object) -join ',') -eq (($all2.workspace_id | Sort-Object) -join ',')) `
-  "before=$(($all.workspace_id) -join ',') after=$(($all2.workspace_id) -join ',')"
-Check 'said it reused them' `
-  (([regex]::Matches($res.Out, 'reusing workspace')).Count -eq 3) "reuse lines`n$($res.Out)"
-Check 'tab counts unchanged' `
-  ((@(Get-TabLabels ($all2 | Where-Object { $_.label -eq '99015-zz-topo' }).workspace_id).Count -eq 4) -and
-   (@(Get-TabLabels ($all2 | Where-Object { $_.label -eq '  aaa' }).workspace_id).Count -eq 3)) 'tab count changed'
+Check 'still one story workspace' ($story2.Count -eq 1) "count=$($story2.Count)`n$($res.Out)"
+Check 'same workspace id' ("$($story2[0].workspace_id)" -eq "$($story[0].workspace_id)") `
+  "before=$($story[0].workspace_id) after=$($story2[0].workspace_id)"
+Check 'said it reused the story workspace' `
+  (([regex]::Matches($res.Out, 'reusing workspace')).Count -eq 1) "reuse lines`n$($res.Out)"
+Check 'story still has four tabs' `
+  ((@(Get-TabLabels $story2[0].workspace_id)).Count -eq 4) `
+  "tabs=$((Get-TabLabels $story2[0].workspace_id) -join ',')"
 
 # ---------------------------------------------------------------------------
 Write-Host ''
-Write-Host '17. a repo added to an existing story gets its own row'
+Write-Host '17. adding a repo updates repos.txt, still one story workspace'
 $c = New-Repo 'ccc' 'main' 1
-# A row created AFTER the story, so the story's block is no longer last in the
-# sidebar. herdr appends every new workspace to the end, so without this decoy
-# the new repo row would follow bbb by accident and the ordering checks below
-# would pass whether or not Set-SidebarOrder did anything.
-$prevEap = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-$decoy = (& herdr workspace create --cwd $script:Root --label 'zz-decoy' --no-focus 2>$null |
-  Out-String | ConvertFrom-Json).result.workspace.workspace_id
-$ErrorActionPreference = $prevEap
-Check 'a decoy row now sits below the story' ([bool]$decoy) 'could not create it'
 $res = Invoke-Make 'development' @{ WT_ID = '99015'; WT_SLUG = 'zz-topo'; WT_REPOS = 'aaa,bbb,ccc' }
-$all3 = @(Get-FixtureWorkspaces $storyDir)
+$story3 = @(Get-FixtureWorkspaces $storyDir -Exact)
 Check 'exit 0 (one repo created)' ($res.Code -eq 0) "exit=$($res.Code)`n$($res.Out)"
-Check 'four rows now' ($all3.Count -eq 4) "count=$($all3.Count)`n$($res.Out)"
-$ccc = @($all3 | Where-Object { $_.label -eq '  ccc' })
-Check 'ccc has its own row' ($ccc.Count -eq 1) "count=$($ccc.Count)`nlabels=$(($all3.label) -join ' | ')"
-if ($ccc.Count -eq 1) {
-  Check 'ccc row has three tabs' ((@(Get-TabLabels $ccc[0].workspace_id)).Count -eq 3) 'wrong tab count'
-}
-if ($all3.Count -eq 4 -and $decoy) {
-  $byNum = @($all3 | Sort-Object number)
-  Check 'the new repo row joined its story rather than the sidebar bottom' `
-    ((($byNum.label) -join '|') -eq '99015-zz-topo|  aaa|  bbb|  ccc') `
-    "order=$(($byNum.label) -join ' | ')"
-  Check 'the four rows are consecutive' `
-    (($byNum[3].number - $byNum[0].number) -eq 3) "numbers=$(($byNum.number) -join ',')"
-  $prevEap = $ErrorActionPreference
-  $ErrorActionPreference = 'Continue'
-  $decoyRow = @((& herdr workspace list 2>$null | Out-String | ConvertFrom-Json).result.workspaces |
-    Where-Object { $_.workspace_id -eq $decoy })
-  $ErrorActionPreference = $prevEap
-  if ($decoyRow.Count -eq 1) {
-    Check 'and above the row that was created after the story' `
-      ($byNum[3].number -lt $decoyRow[0].number) `
-      "ccc at $($byNum[3].number), decoy at $($decoyRow[0].number)"
-  }
-}
-if ($decoy) {
-  $prevEap = $ErrorActionPreference
-  $ErrorActionPreference = 'Continue'
-  & herdr workspace close $decoy 2>$null | Out-Null
-  $ErrorActionPreference = $prevEap
-}
-Check 'prints the config hint when $tree is not configured' `
-  ($res.Out -match '\[ui\.sidebar\.spaces\]') "no hint`n$($res.Out)"
+Check 'repos.txt lists aaa, bbb, ccc' `
+  ((Get-Content -LiteralPath $reposTxt -Raw) -eq "aaa`nbbb`nccc`n") "content=$(Get-Content -LiteralPath $reposTxt -Raw | Format-Hex)"
+Check 'still exactly one story workspace' ($story3.Count -eq 1) "count=$($story3.Count)`n$($res.Out)"
+$cccRow = @(Get-FixtureWorkspaces (Story '99015' 'zz-topo' 'ccc') -Exact)
+Check 'no sidebar row for ccc' ($cccRow.Count -eq 0) "count=$($cccRow.Count)"
+Check 'ccc worktree exists on disk' `
+  (Test-Path -LiteralPath (Join-Path (Story '99015' 'zz-topo' 'ccc') '.git')) 'ccc missing'
 
 # ---------------------------------------------------------------------------
 Write-Host ''
-Write-Host '18. $tree token: connectors reported, labels un-indented, last repo gets the corner'
+Write-Host '18. repos.txt stays in sync with tree config; still no per-repo rows'
 Reset-Fixture
 Write-FixtureConfig -WithTreeToken
 $a = New-Repo 'aaa' 'main' 1
 $b = New-Repo 'bbb' 'main' 1
 $res = Invoke-Make 'development' @{ WT_ID = '99018'; WT_SLUG = 'zz-tree'; WT_REPOS = 'aaa,bbb' }
-$storyDir = Split-Path -Parent (Story '99018' 'zz-tree' 'aaa')
+$storyDir18 = Split-Path -Parent (Story '99018' 'zz-tree' 'aaa')
+$reposTxt18 = Join-Path $storyDir18 'repos.txt'
 Check 'exit 0' ($res.Code -eq 0) "exit=$($res.Code)`n$($res.Out)"
-Check 'no config hint (it is configured)' `
-  (-not ($res.Out -match '\[ui\.sidebar\.spaces\]')) "hint printed anyway`n$($res.Out)"
-
-$story = @(Get-FixtureWorkspaces $storyDir -Exact)
-Check 'story row exists' ($story.Count -eq 1) "count=$($story.Count)"
-if ($story.Count -eq 1) {
-  # The trunk carries no connector; an absent token renders as nothing, which is
-  # also why the story row shows no separator dot.
-  Check 'story row has no tree token' (-not (HasTreeToken $story[0])) `
-    "tokens=$($story[0].tokens | ConvertTo-Json -Compress)"
-}
-
-$rowA = @(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'aaa') -Exact)
-$rowB = @(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'bbb') -Exact)
-Check 'both repo rows exist' (($rowA.Count -eq 1) -and ($rowB.Count -eq 1)) "a=$($rowA.Count) b=$($rowB.Count)"
-if (($rowA.Count -eq 1) -and ($rowB.Count -eq 1)) {
-  Check 'labels are the bare repo name (no label indent)' `
-    (("$($rowA[0].label)" -eq 'aaa') -and ("$($rowB[0].label)" -eq 'bbb')) `
-    "a=[$($rowA[0].label)] b=[$($rowB[0].label)]"
-  Check 'first repo gets the tee connector' ((TreeToken $rowA[0]) -eq $BRANCH_CH) `
-    "got=[$(TreeToken $rowA[0])]"
-  Check 'last repo gets the corner connector' ((TreeToken $rowB[0]) -eq $LAST_CH) `
-    "got=[$(TreeToken $rowB[0])]"
-}
-
-Write-Host ''
-Write-Host '18b. adding a repo moves the corner down to the new last one'
+Check 'repos.txt lists aaa then bbb' `
+  ((Get-Content -LiteralPath $reposTxt18 -Raw) -eq "aaa`nbbb`n") "content=$(Get-Content -LiteralPath $reposTxt18 -Raw | Format-Hex)"
+$story18 = @(Get-FixtureWorkspaces $storyDir18 -Exact)
+Check 'exactly one story workspace' ($story18.Count -eq 1) "count=$($story18.Count)"
+Check 'no per-repo workspace rows' `
+  ((@(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'aaa') -Exact).Count -eq 0) -and
+   (@(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'bbb') -Exact).Count -eq 0)) 'a repo row exists'
 $c = New-Repo 'ccc' 'main' 1
 $res = Invoke-Make 'development' @{ WT_ID = '99018'; WT_SLUG = 'zz-tree'; WT_REPOS = 'aaa,bbb,ccc' }
-$rowB = @(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'bbb') -Exact)
-$rowC = @(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'ccc') -Exact)
-Check 'exit 0' ($res.Code -eq 0) "exit=$($res.Code)`n$($res.Out)"
-Check 'bbb gave up the corner' `
-  (($rowB.Count -eq 1) -and ((TreeToken $rowB[0]) -eq $BRANCH_CH)) "got=[$(TreeToken $rowB[0])]"
-Check 'ccc took it' `
-  (($rowC.Count -eq 1) -and ((TreeToken $rowC[0]) -eq $LAST_CH)) "got=[$(TreeToken $rowC[0])]"
-
-Write-Host ''
-Write-Host '18c. a row labelled by the label-era script is adopted, not duplicated'
-# For one release the connectors were drawn in the label. Such a row must be
-# recognised by its bare name and renamed, or a re-run would leave two rows for
-# the same repo sitting next to each other.
-$cccRow = @(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'ccc') -Exact)
-if ($cccRow.Count -eq 1) {
-  $prevEap = $ErrorActionPreference
-  $ErrorActionPreference = 'Continue'
-  & herdr workspace rename $cccRow[0].workspace_id "$LAST_CH ccc" 2>$null | Out-Null
-  $ErrorActionPreference = $prevEap
-  $res = Invoke-Make 'development' @{ WT_ID = '99018'; WT_SLUG = 'zz-tree'; WT_REPOS = 'aaa,bbb,ccc' }
-  $after = @(Get-FixtureWorkspaces (Story '99018' 'zz-tree' 'ccc') -Exact)
-  Check 'still exactly one row for ccc' ($after.Count -eq 1) "count=$($after.Count)`n$($res.Out)"
-  if ($after.Count -eq 1) {
-    Check 'it kept the same workspace id' ("$($after[0].workspace_id)" -eq "$($cccRow[0].workspace_id)") `
-      "was $($cccRow[0].workspace_id) now $($after[0].workspace_id)"
-    Check 'and was renamed back to the bare name' ("$($after[0].label)" -eq 'ccc') `
-      "label=[$($after[0].label)]"
-  }
-} else {
-  Check 'ccc row available to rename' $false "count=$($cccRow.Count)"
-}
+Check 'repos.txt updated to three lines' `
+  ((Get-Content -LiteralPath $reposTxt18 -Raw) -eq "aaa`nbbb`nccc`n") "content=$(Get-Content -LiteralPath $reposTxt18 -Raw | Format-Hex)"
+$story18b = @(Get-FixtureWorkspaces $storyDir18 -Exact)
+Check 'still one story workspace after adding ccc' ($story18b.Count -eq 1) "count=$($story18b.Count)"
 
 # ---------------------------------------------------------------------------
 # Cleanup order matters, and one pass is not enough. herdr keeps a workspace for
